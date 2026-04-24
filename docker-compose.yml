@@ -1,0 +1,20 @@
+services:
+  venue_list:
+    build: ./server
+    image: venue_list-server
+    container_name: venue_list
+    restart: unless-stopped
+    ports:
+      - "5175:5175"  # API (Express)
+      - "6080:6080"  # noVNC web UI — open http://localhost:6080/vnc.html to see/drive Chrome
+    volumes:
+      - userdata:/app/.user-data
+    # Chrome under Xvfb needs a bit more shared memory than Docker's 64MB default.
+    shm_size: "1gb"
+    environment:
+      PORT: "5175"
+      NOVNC_PORT: "6080"
+      VNC_RESOLUTION: "1440x900x24"
+
+volumes:
+  userdata:

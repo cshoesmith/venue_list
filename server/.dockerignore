@@ -1,0 +1,8 @@
+node_modules/
+.user-data/
+debug/
+npm-debug.log*
+.env
+.DS_Store
+Dockerfile
+.dockerignore

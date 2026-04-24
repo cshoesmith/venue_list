@@ -6,14 +6,17 @@ import { fileURLToPath } from 'node:url';
 import net from 'node:net';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const USER_DATA_DIR = path.join(__dirname, '.user-data');
+const USER_DATA_DIR = process.env.USER_DATA_DIR || path.join(__dirname, '.user-data');
 const CDP_PORT = Number(process.env.CDP_PORT) || 9333;
+const CHROME_NO_SANDBOX = /^(1|true|yes)$/i.test(process.env.CHROME_NO_SANDBOX || '');
 
+// CHROME_PATH env wins; otherwise fall back to the most likely location per OS.
 const CHROME_CANDIDATES = [
   process.env.CHROME_PATH,
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-  `${process.env.LOCALAPPDATA}\\Google\\Chrome\\Application\\chrome.exe`,
+  '/usr/bin/google-chrome',
+  '/usr/bin/google-chrome-stable',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
 ].filter(Boolean);
 
 let chromeProc = null;
@@ -62,8 +65,12 @@ async function ensureChrome() {
     '--no-first-run',
     '--no-default-browser-check',
     '--start-maximized',
-    'about:blank',
   ];
+  if (CHROME_NO_SANDBOX) {
+    // Required when running as root inside a container; also bypasses /dev/shm issues.
+    args.push('--no-sandbox', '--disable-dev-shm-usage');
+  }
+  args.push('about:blank');
   console.log('[scraper] launching Chrome:', exe);
   chromeProc = spawn(exe, args, { detached: false, stdio: 'ignore' });
   chromeProc.on('exit', (code) => {
