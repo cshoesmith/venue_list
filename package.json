@@ -1,0 +1,15 @@
+{
+  "name": "venue-list",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Untappd venue beer-list explorer (local app with Playwright-backed auth)",
+  "scripts": {
+    "install:all": "npm install && npm --prefix server install && npm --prefix client install && npx --prefix server playwright install chromium",
+    "dev": "concurrently -k -n server,client -c blue,green \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
+    "server": "npm --prefix server run dev",
+    "client": "npm --prefix client run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}
