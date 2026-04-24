@@ -56,6 +56,12 @@ async function waitForPort(port, timeoutMs = 20000) {
 async function ensureChrome() {
   if (chromeProc && !chromeProc.killed && (await portOpen(CDP_PORT))) return;
   if (!fs.existsSync(USER_DATA_DIR)) fs.mkdirSync(USER_DATA_DIR, { recursive: true });
+  // Stale singleton locks from a prior (now-dead) Chrome process will make a
+  // fresh launch fail immediately with "profile appears to be in use".
+  // Safe to remove — we only get here when no Chrome is actually running.
+  for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+    try { fs.unlinkSync(path.join(USER_DATA_DIR, name)); } catch { /* ignore */ }
+  }
   const exe = findChrome();
   // Minimal, clean flags. Critically NO --enable-automation and NO
   // --disable-blink-features=AutomationControlled (the latter is itself a tell).
