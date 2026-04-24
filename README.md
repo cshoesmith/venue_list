@@ -44,7 +44,16 @@ In the UI, click **Open login window**. A Chromium window appears -- log in to U
 
 ## Running the server in Docker
 
-The scraper can run in a container that ships real Google Chrome, Xvfb, and a noVNC bridge so you can see / drive the headed browser from any web browser (required for the one-time Untappd login and any Cloudflare challenges).
+The scraper runs in a container that ships real Google Chrome, Xvfb, a noVNC bridge (so you can log in to Untappd from any browser), and the **built React client** served by Express on the same port as the API.
+
+### Configure
+
+Copy `.env.example` to `.env` and fill in:
+
+```ini
+APP_SECRET=<long random string>
+TUNNEL_TOKEN=<from Cloudflare Zero Trust → Tunnels>
+```
 
 ### Start
 
@@ -52,21 +61,33 @@ The scraper can run in a container that ships real Google Chrome, Xvfb, and a no
 docker compose up -d --build
 ```
 
-Exposed ports:
-- `5175` — REST API (the React client talks to this via the Vite proxy just like before).
-- `6080` — noVNC web UI.
+Exposed ports on the host:
+- `5175` — UI + API (Express serves the built client and `/api/*`).
+- `6080` — noVNC web UI for driving the container's Chrome.
 
-The Untappd profile cookies are persisted in a named Docker volume (`userdata`), so logins survive container restarts and rebuilds.
+Persistent Untappd login lives in a Docker volume (`userdata`) so it survives rebuilds.
 
-### First-time login (inside the container)
+### First-time Untappd login
 
-1. Start the client locally: `npm run client` (still points at `localhost:5175`).
-2. Open the app at http://localhost:5173 and click **Open login window**. Chrome launches *inside* the container on its virtual display; you can't see it yet.
-3. Open http://localhost:6080/vnc.html → **Connect** (no password). You'll see the container's desktop with the Chromium window on Untappd.
-4. Log in to Untappd. Solve any Cloudflare checkbox. Close the tab when done.
-5. Back in the app, the status dot should flip to **logged in to Untappd**.
+1. Open http://localhost:5175/#k=YOUR_APP_SECRET (the hash seeds the client's stored secret, then is stripped from the URL).
+2. Click **Open login window**. Chrome launches on the container's virtual display.
+3. Open http://localhost:6080/vnc.html → **Connect** (no password). You'll see Chrome on Untappd; log in and solve any Cloudflare challenge.
+4. Back on :5175 the status dot flips to green.
 
-From then on the session cookie lives in the `userdata` volume and everything works the same as the host-based setup.
+### Public access via Cloudflare Tunnel
+
+Goal: `https://verified.craftbeers.app` → your machine's container → the app.
+
+1. Cloudflare dashboard → **Zero Trust** → **Networks → Tunnels** → **Create tunnel** (Cloudflared).
+2. Name it (e.g. `venue_list`). Copy the generated **connector token** into `.env` as `TUNNEL_TOKEN`.
+3. In the tunnel's **Public Hostname** tab, add a route:
+   - Subdomain: `verified`  Domain: `craftbeers.app`
+   - Service: `HTTP`  URL: `venue_list:5175`  ← this is the compose service name; cloudflared resolves it on the Docker network.
+4. DNS: the tunnel wizard auto-creates the CNAME. Verify `verified.craftbeers.app` appears in your DNS records.
+5. `docker compose up -d` (the `cloudflared` service reads `TUNNEL_TOKEN` and connects).
+6. Share the URL with a hash-seeded secret the first time: `https://verified.craftbeers.app/#k=YOUR_APP_SECRET`. After that, the client remembers it in localStorage.
+
+Anyone hitting the URL without the secret gets `401` on `/api/*`. The UI itself loads but can't fetch data.
 
 ### Stop / rebuild / reset
 

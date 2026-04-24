@@ -1,7 +1,24 @@
 import { useEffect, useMemo, useState } from 'react';
 
-async function api(path, options) {
-  const res = await fetch(path, options);
+// Capture an API secret from `#k=...` on first load, persist in localStorage.
+const SECRET_KEY = 'venue_list.secret';
+(function captureSecret() {
+  try {
+    const hash = window.location.hash || '';
+    const m = hash.match(/[#&]k=([^&]+)/);
+    if (m) {
+      localStorage.setItem(SECRET_KEY, decodeURIComponent(m[1]));
+      // Strip the secret from the URL so it doesn't leak into history/screenshots.
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  } catch { /* ignore */ }
+})();
+
+async function api(path, options = {}) {
+  const secret = (() => { try { return localStorage.getItem(SECRET_KEY) || ''; } catch { return ''; } })();
+  const headers = new Headers(options.headers || {});
+  if (secret) headers.set('X-App-Secret', secret);
+  const res = await fetch(path, { ...options, headers });
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { data = { raw: text }; }

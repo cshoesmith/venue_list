@@ -1,20 +1,37 @@
 services:
   venue_list:
-    build: ./server
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: venue_list-server
     container_name: venue_list
     restart: unless-stopped
     ports:
-      - "5175:5175"  # API (Express)
-      - "6080:6080"  # noVNC web UI — open http://localhost:6080/vnc.html to see/drive Chrome
+      - "5175:5175"  # UI + API (Express serves both)
+      - "6080:6080"  # noVNC web UI — http://localhost:6080/vnc.html to drive Chrome
     volumes:
       - userdata:/app/.user-data
-    # Chrome under Xvfb needs a bit more shared memory than Docker's 64MB default.
     shm_size: "1gb"
     environment:
       PORT: "5175"
       NOVNC_PORT: "6080"
       VNC_RESOLUTION: "1440x900x24"
+      # Secret required on every /api/* request (except /api/health).
+      # Client captures it via URL hash `#k=...` once, then stores in localStorage.
+      APP_SECRET: "${APP_SECRET:-}"
+
+  # Cloudflare named tunnel. Create the tunnel + DNS route in the CF dashboard
+  # for verified.craftbeers.app, then put TUNNEL_TOKEN in .env.
+  # Traffic flow:  internet -> cloudflared -> venue_list:5175
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: venue_list_tunnel
+    restart: unless-stopped
+    depends_on:
+      - venue_list
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    environment:
+      TUNNEL_TOKEN: "${TUNNEL_TOKEN:-}"
 
 volumes:
   userdata:
