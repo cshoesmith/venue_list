@@ -21,7 +21,7 @@ services:
       APP_SECRET: "${APP_SECRET:-}"
 
   # Cloudflare named tunnel. Create the tunnel + DNS route in the CF dashboard
-  # for verified.craftbeers.app, then put TUNNEL_TOKEN in .env.
+  # for verified.craftcloud.icu, then put TUNNEL_TOKEN in .env.
   # Traffic flow:  internet -> cloudflared -> venue_list:5175
   cloudflared:
     image: cloudflare/cloudflared:latest

@@ -76,16 +76,16 @@ Persistent Untappd login lives in a Docker volume (`userdata`) so it survives re
 
 ### Public access via Cloudflare Tunnel
 
-Goal: `https://verified.craftbeers.app` → your machine's container → the app.
+Goal: `https://verified.craftcloud.icu` → your machine's container → the app.
 
 1. Cloudflare dashboard → **Zero Trust** → **Networks → Tunnels** → **Create tunnel** (Cloudflared).
 2. Name it (e.g. `venue_list`). Copy the generated **connector token** into `.env` as `TUNNEL_TOKEN`.
 3. In the tunnel's **Public Hostname** tab, add a route:
-   - Subdomain: `verified`  Domain: `craftbeers.app`
+   - Subdomain: `verified`  Domain: `craftcloud.icu`
    - Service: `HTTP`  URL: `venue_list:5175`  ← this is the compose service name; cloudflared resolves it on the Docker network.
-4. DNS: the tunnel wizard auto-creates the CNAME. Verify `verified.craftbeers.app` appears in your DNS records.
+4. DNS: the tunnel wizard auto-creates the CNAME. Verify `verified.craftcloud.icu` appears in your DNS records.
 5. `docker compose up -d` (the `cloudflared` service reads `TUNNEL_TOKEN` and connects).
-6. Share the URL with a hash-seeded secret the first time: `https://verified.craftbeers.app/#k=YOUR_APP_SECRET`. After that, the client remembers it in localStorage.
+6. Share the URL with a hash-seeded secret the first time: `https://verified.craftcloud.icu/#k=YOUR_APP_SECRET`. After that, the client remembers it in localStorage.
 
 Anyone hitting the URL without the secret gets `401` on `/api/*`. The UI itself loads but can't fetch data.
 
