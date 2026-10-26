@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -e
 
+# Clear stale X locks left behind when the container was stopped uncleanly;
+# otherwise Xvfb refuses to start on restart.
+rm -f /tmp/.X${DISPLAY#:}-lock /tmp/.X11-unix/X${DISPLAY#:}
+
 echo "[start] launching Xvfb on $DISPLAY ($VNC_RESOLUTION)"
 Xvfb "$DISPLAY" -screen 0 "$VNC_RESOLUTION" -ac +extension RANDR +extension GLX &
 XVFB_PID=$!
