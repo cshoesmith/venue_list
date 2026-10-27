@@ -258,6 +258,14 @@ button.star.small { font-size: 18px; padding: 2px 4px; }
 }
 
 .saved-star { color: var(--accent); }
+.saved-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 24px 0 8px;
+}
+.saved-head .section-title { margin: 0; }
 .slot-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .beer-mug {
   width: 1.25em;

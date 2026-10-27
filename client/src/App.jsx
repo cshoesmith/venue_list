@@ -196,6 +196,9 @@ export default function App() {
   const [saved, setSaved] = useState([]);
   const [savedMax, setSavedMax] = useState(20);
   const [refreshing, setRefreshing] = useState({}); // url -> true while a saved tile reloads
+  const [refreshAll, setRefreshAll] = useState(null); // { done, total } while refreshing every saved venue
+  const stopAll = useRef(false); // read inside the running loop
+  const [stopping, setStopping] = useState(false); // same flag, for rendering
   const [sectionFavs, setSectionFavs] = useState({}); // venue url -> [section key]
   const [sectionOpen, setSectionOpen] = useState({}); // section key -> expanded, set by the user
   const [now, setNow] = useState(Date.now());
@@ -331,17 +334,41 @@ export default function App() {
     }
   };
 
-  const refreshSaved = async (url) => {
-    setError('');
+  // Returns whether the refresh worked; `quiet` leaves error reporting to the caller.
+  const refreshSaved = async (url, { quiet = false } = {}) => {
+    if (!quiet) setError('');
     setRefreshing((r) => ({ ...r, [url]: true }));
     try {
       const data = await api(`/api/venue?url=${encodeURIComponent(url)}`);
       syncSaved(url, data);
+      return true;
     } catch (e) {
-      setError(e.message);
+      if (!quiet) setError(e.message);
+      return false;
     } finally {
       setRefreshing(({ [url]: _, ...rest }) => rest);
     }
+  };
+
+  // Refresh every saved venue top to bottom, one at a time (they share one
+  // Chrome). Pressing the button again stops after the current venue.
+  const refreshAllSaved = async () => {
+    if (refreshAll) { stopAll.current = true; setStopping(true); return; }
+    stopAll.current = false;
+    setError('');
+    const list = saved.map((e) => ({ url: e.venue.url, name: e.menu?.venue?.name || e.venue.name }));
+    const failed = [];
+    for (let i = 0; i < list.length && !stopAll.current; i++) {
+      setRefreshAll({ done: i, total: list.length });
+      try {
+        document.querySelector(`[data-url="${CSS.escape(list[i].url)}"]`)
+          ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      } catch { /* ignore */ }
+      if (!(await refreshSaved(list[i].url, { quiet: true }))) failed.push(list[i].name);
+    }
+    setRefreshAll(null);
+    setStopping(false);
+    if (failed.length) setError(`Couldn’t refresh: ${failed.join(', ')}`);
   };
 
   const removeSaved = async (url) => {
@@ -573,7 +600,22 @@ export default function App() {
       </form>
 
       {!!saved.length && (
-        <div className="section-title">Saved venues ({saved.length}/{savedMax})</div>
+        <div className="saved-head">
+          <div className="section-title">Saved venues ({saved.length}/{savedMax})</div>
+          <button
+            type="button"
+            className="secondary"
+            title={refreshAll ? 'Stop after the current venue' : 'Fetch the latest menu for every saved venue'}
+            disabled={!loggedIn || stopping}
+            onClick={refreshAllSaved}
+          >
+            {refreshAll ? (
+              <><BeerMug /> {refreshAll.done + 1}/{refreshAll.total} · {stopping ? 'Stopping…' : 'Stop'}</>
+            ) : (
+              '↻ Refresh all'
+            )}
+          </button>
+        </div>
       )}
       <div className="results" hidden={!saved.length}>
         {saved.map((e) => {
@@ -581,7 +623,7 @@ export default function App() {
           const newCount = beers.filter((b) => !b.had).length;
           const logo = e.menu?.venue?.logo;
           return (
-            <div key={e.venue.url} className="row" onClick={() => openSaved(e)}>
+            <div key={e.venue.url} className="row" data-url={e.venue.url} onClick={() => openSaved(e)}>
               {logo ? (
                 <img className="venue-logo" src={logo} alt="" />
               ) : (
@@ -600,7 +642,7 @@ export default function App() {
                   type="button"
                   title="Fetch the latest menu from Untappd"
                   aria-label="Refresh menu"
-                  disabled={!!refreshing[e.venue.url] || !loggedIn}
+                  disabled={!!refreshing[e.venue.url] || !!refreshAll || !loggedIn}
                   onClick={(ev) => { ev.stopPropagation(); refreshSaved(e.venue.url); }}
                 >
                   {refreshing[e.venue.url] ? <BeerMug /> : <span>↻</span>}
