@@ -205,10 +205,31 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: var(--text);
 }
 .section-header .section-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
   font-size: 12px;
   font-weight: 400;
   color: var(--muted);
 }
+.section-header:has(.section-toggle) { align-items: center; }
+.section-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  border-radius: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.section-toggle .chevron { width: 1em; flex-shrink: 0; color: var(--muted); }
+button.star.small { font-size: 18px; padding: 2px 4px; }
 
 .error {
   background: rgba(248,113,113,0.12);
@@ -382,6 +403,33 @@ button.danger {
   letter-spacing: 0.04em;
   margin-top: 2px;
 }
+.session-info {
+  margin-top: 16px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.session-title {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+.session-info dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+.session-info dt { color: var(--muted); }
+.session-info dd { margin: 0; }
+.session-info details { margin-top: 8px; color: var(--muted); }
+.session-info summary { cursor: pointer; }
+.session-info ul { margin: 6px 0 0; padding-left: 18px; font-size: 12px; }
+
 .profile-actions {
   display: flex;
   flex-wrap: wrap;

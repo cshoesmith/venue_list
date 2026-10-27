@@ -52,6 +52,32 @@ function timeAgo(iso, now) {
   return `${Math.floor(hours / 24)} days ago`;
 }
 
+// Section names carry a live item count ("On Tap (12 Items)"); favourites
+// must survive it changing.
+function sectionKey(name) {
+  return (name || '').replace(/\s*\(\d+\s+items?\)\s*$/i, '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function shortDate(iso, withTime = false) {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso === 'session' ? 'session' : '—';
+  return new Date(t).toLocaleString(undefined, withTime
+    ? { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }
+    : { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+// "21 Nov 2026 (in 24 days)" for a cookie expiry.
+function expiryText(iso, now) {
+  if (!iso) return 'not set';
+  if (iso === 'session') return 'when Chrome closes';
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return '';
+  if (t <= now) return `${shortDate(iso)} (expired)`;
+  const days = Math.floor((t - now) / 86400000);
+  const rel = days === 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`;
+  return `${shortDate(iso)} (${rel})`;
+}
+
 // Crown-cap outline (21 crimps), shared with public/favicon.svg.
 const CAP_POINTS =
   '12.00,0.50 13.52,1.91 15.39,1.01 16.43,2.81 18.48,2.50 18.94,4.52 20.99,4.83 20.83,6.90 '
@@ -170,6 +196,8 @@ export default function App() {
   const [saved, setSaved] = useState([]);
   const [savedMax, setSavedMax] = useState(20);
   const [refreshing, setRefreshing] = useState({}); // url -> true while a saved tile reloads
+  const [sectionFavs, setSectionFavs] = useState({}); // venue url -> [section key]
+  const [sectionOpen, setSectionOpen] = useState({}); // section key -> expanded, set by the user
   const [now, setNow] = useState(Date.now());
   // URL of the menu currently shown, so a slow fetch can't land in a closed modal.
   const activeUrl = useRef(null);
@@ -208,15 +236,24 @@ export default function App() {
     }
   };
 
-  useEffect(() => { refreshStatus(); loadSaved(); }, []);
+  const loadSectionFavs = async () => {
+    try {
+      setSectionFavs((await api('/api/section-favs')).favs);
+    } catch (e) {
+      setError(e.message);
+    }
+  };
 
-  // Re-check login and re-sync saved venues (they may have changed on another
-  // device) whenever the tab comes back into view.
+  useEffect(() => { refreshStatus(); loadSaved(); loadSectionFavs(); }, []);
+
+  // Re-check login and re-sync saved venues and favourite sections (they may
+  // have changed on another device) whenever the tab comes back into view.
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== 'visible') return;
       refreshStatus();
       loadSaved();
+      loadSectionFavs();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
@@ -224,6 +261,27 @@ export default function App() {
 
   const savedEntry = (url) => saved.find((e) => e.venue.url === url);
   const isSaved = !!(selected && savedEntry(selected.url));
+
+  // Each venue opens with its sections in their default state.
+  useEffect(() => { setSectionOpen({}); }, [selected?.url]);
+
+  const toggleSectionFav = async (key) => {
+    const url = selected?.url;
+    if (!url) return;
+    const prev = sectionFavs[url] || [];
+    const next = prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key];
+    setSectionFavs((f) => ({ ...f, [url]: next }));
+    try {
+      await api('/api/section-favs', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, sections: next }),
+      });
+    } catch (e) {
+      setSectionFavs((f) => ({ ...f, [url]: prev }));
+      setError(e.message);
+    }
+  };
 
   // The server refreshes its cached copy on every scrape; mirror that locally.
   const syncSaved = (url, data) => {
@@ -434,6 +492,14 @@ export default function App() {
   }, [menu, filter]);
 
   const hadCount = allBeers.filter((b) => b.had).length;
+
+  // Multi-section menus collapse: favourite sections start expanded, the rest
+  // collapsed. With no favourite on this menu, everything starts expanded.
+  const multiSection = (menu?.sections?.length || 0) > 1;
+  const favKeys = (selected && sectionFavs[selected.url]) || [];
+  const hasFavHere = !!menu?.sections?.some((s) => favKeys.includes(sectionKey(s.name)));
+  const isExpanded = (key) => !multiSection
+    || (sectionOpen[key] ?? (!hasFavHere || favKeys.includes(key)));
   const modalOpen = showVenues || !!selected || showProfile;
 
   return (
@@ -579,6 +645,29 @@ export default function App() {
               </div>
             </div>
           )}
+          {profile?.session && (
+            <div className="session-info">
+              <div className="session-title">Server session</div>
+              <dl>
+                <dt>Login</dt><dd>{expiryText(profile.session.login, now)}</dd>
+                <dt>Session</dt><dd>{expiryText(profile.session.session, now)}</dd>
+                <dt>Cloudflare</dt><dd>{expiryText(profile.session.cloudflare, now)}</dd>
+              </dl>
+              {!!profile.session.history?.length && (
+                <details>
+                  <summary>Expiry history ({profile.session.history.length})</summary>
+                  <ul>
+                    {profile.session.history.map((h) => (
+                      <li key={h.seenAt}>
+                        {shortDate(h.seenAt, true)}: login {shortDate(h.login, true)},
+                        session {shortDate(h.session, true)}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
           <div className="profile-actions">
             <button className="danger" onClick={doLogout} disabled={loggingOut}>
               {loggingOut ? 'Logging out…' : 'Log out'}
@@ -669,17 +758,45 @@ export default function App() {
               )}
               {filteredSections.map((section) => {
                 const secHad = section.beers.filter((b) => b.had).length;
+                const key = sectionKey(section.name);
+                const expanded = isExpanded(key);
+                const fav = favKeys.includes(key);
                 return (
                   <div key={section.name || 'unnamed'} style={{ marginBottom: 18 }}>
                     {section.name && (
                       <div className="section-header">
-                        <span>{section.name}</span>
+                        {multiSection ? (
+                          <button
+                            type="button"
+                            className="section-toggle"
+                            aria-expanded={expanded}
+                            onClick={() => setSectionOpen((o) => ({ ...o, [key]: !expanded }))}
+                          >
+                            <span className="chevron">{expanded ? '▾' : '▸'}</span>
+                            {section.name}
+                          </button>
+                        ) : (
+                          <span>{section.name}</span>
+                        )}
                         <span className="section-stats">
                           {section.beers.length} items · {secHad} had
+                          {multiSection && (
+                            <button
+                              type="button"
+                              className={`star small ${fav ? 'on' : ''}`}
+                              onClick={() => toggleSectionFav(key)}
+                              aria-label={fav ? 'Unfavourite section' : 'Favourite section'}
+                              title={fav
+                                ? 'Favourite section — opens expanded. Tap to remove.'
+                                : 'Favourite this section so it opens expanded'}
+                            >
+                              {fav ? '★' : '☆'}
+                            </button>
+                          )}
                         </span>
                       </div>
                     )}
-                    <div className="menu">
+                    <div className="menu" hidden={!expanded}>
                       {section.beers.map((b) => (
                         <div
                           key={b.url}

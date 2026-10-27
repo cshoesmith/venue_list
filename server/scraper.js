@@ -33,6 +33,10 @@ const HAD_FILE = path.join(USER_DATA_DIR, 'had-beers.json');
 // Venues without a menu get one built from check-ins this recent.
 const CHECKIN_WINDOW_DAYS = 7;
 
+// Every change seen in the session cookies' expiry, to learn how long a login lasts.
+const SESSION_LOG = path.join(USER_DATA_DIR, 'session-log.json');
+const SESSION_LOG_MAX = 50;
+
 function findChrome() {
   for (const p of CHROME_CANDIDATES) {
     try { if (fs.existsSync(p)) return p; } catch { /* ignore */ }
@@ -134,7 +138,61 @@ export async function isLoggedIn() {
   console.log(
     `[scraper] isLoggedIn cookies: total=${cookies.length} untappd=${untappdCookies.length} names=[${untappdCookies.map((c) => c.name).join(',')}]`,
   );
-  return untappdCookies.some((c) => /^untappd_(user|session)_/i.test(c.name));
+  const loggedIn = untappdCookies.some((c) => /^untappd_(user|session)_/i.test(c.name));
+  if (loggedIn) recordSession(sessionExpiry(untappdCookies));
+  return loggedIn;
+}
+
+// ISO expiry of the login, session and Cloudflare cookies ('session' = no expiry set).
+function sessionExpiry(cookies) {
+  const expiry = (re) => {
+    const c = cookies.find((k) => re.test(k.name));
+    if (!c) return null;
+    return c.expires > 0 ? new Date(c.expires * 1000).toISOString() : 'session';
+  };
+  return {
+    login: expiry(/^untappd_user_/i),
+    session: expiry(/^untappd_session_/i),
+    cloudflare: expiry(/^cf_clearance$/),
+  };
+}
+
+function readSessionLog() {
+  try {
+    const log = JSON.parse(fs.readFileSync(SESSION_LOG, 'utf8'));
+    return Array.isArray(log) ? log : [];
+  } catch {
+    return [];
+  }
+}
+
+// Log the expiries when any of them has moved by more than an hour since the
+// last entry, so a sliding session shows up without logging every request.
+function recordSession(exp) {
+  const log = readSessionLog();
+  const last = log[log.length - 1];
+  const moved = (a, b) => {
+    if (a === b) return false;
+    const ta = Date.parse(a);
+    const tb = Date.parse(b);
+    return Number.isNaN(ta) || Number.isNaN(tb) || Math.abs(ta - tb) > 60 * 60 * 1000;
+  };
+  if (last && !['login', 'session', 'cloudflare'].some((k) => moved(last[k], exp[k]))) return;
+  log.push({ seenAt: new Date().toISOString(), ...exp });
+  try {
+    fs.writeFileSync(SESSION_LOG, JSON.stringify(log.slice(-SESSION_LOG_MAX)));
+  } catch (err) {
+    console.log('[scraper] could not write session log:', err.message);
+  }
+}
+
+/** Current cookie expiries plus the logged history of changes, newest first. */
+export async function getSessionInfo() {
+  const ctx = await getContext();
+  const cookies = await ctx.cookies('https://untappd.com').catch(() => []);
+  const current = sessionExpiry(cookies);
+  if (current.login || current.session) recordSession(current);
+  return { ...current, history: readSessionLog().reverse() };
 }
 
 export async function openLoginWindow() {

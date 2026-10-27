@@ -15,8 +15,10 @@ import {
   getProfile,
   logout,
   getBeer,
+  getSessionInfo,
 } from './scraper.js';
 import { listSaved, saveMenu, removeSaved, updateIfSaved, MAX_SAVED } from './saved.js';
+import { listSectionFavs, setSectionFavs } from './sectionFavs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_DIR = process.env.STATIC_DIR || path.join(__dirname, 'public');
@@ -60,7 +62,9 @@ app.post('/api/login', async (_req, res) => {
 
 app.get('/api/me', async (req, res) => {
   try {
-    res.json(await getProfile(req.query.refresh === '1'));
+    // Profile is cached; the session expiry is read fresh every time.
+    const profile = await getProfile(req.query.refresh === '1');
+    res.json({ ...profile, session: await getSessionInfo() });
   } catch (err) {
     res.status(500).json({ error: String(err?.message || err) });
   }
@@ -123,6 +127,16 @@ app.delete('/api/saved', (req, res) => {
   if (!url) return res.status(400).json({ error: 'Missing url' });
   removeSaved(url);
   res.json({ ok: true });
+});
+
+app.get('/api/section-favs', (_req, res) => {
+  res.json({ favs: listSectionFavs() });
+});
+
+app.put('/api/section-favs', (req, res) => {
+  const { url, sections } = req.body || {};
+  if (!url || !Array.isArray(sections)) return res.status(400).json({ error: 'Missing url or sections' });
+  res.json({ url, sections: setSectionFavs(String(url), sections) });
 });
 
 app.get('/api/beer', async (req, res) => {
