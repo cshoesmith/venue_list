@@ -11,7 +11,12 @@ import {
   shutdown,
   getLastDebug,
   refreshHadBeers,
+  currentUsername,
+  getProfile,
+  logout,
+  getBeer,
 } from './scraper.js';
+import { listSaved, saveMenu, removeSaved, updateIfSaved, MAX_SAVED } from './saved.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STATIC_DIR = process.env.STATIC_DIR || path.join(__dirname, 'public');
@@ -20,7 +25,7 @@ const APP_SECRET = process.env.APP_SECRET || '';
 const app = express();
 app.set('trust proxy', 1); // we're behind Cloudflare Tunnel
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '2mb' })); // saved menus are posted whole
 
 // Health endpoint (unauthenticated) — used by tunnel / uptime checks.
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
@@ -37,7 +42,8 @@ app.use('/api', (req, res, next) => {
 app.get('/api/status', async (_req, res) => {
   try {
     const loggedIn = await isLoggedIn();
-    res.json({ loggedIn });
+    const username = loggedIn ? await currentUsername() : null;
+    res.json({ loggedIn, username });
   } catch (err) {
     res.status(500).json({ error: String(err?.message || err) });
   }
@@ -47,6 +53,23 @@ app.post('/api/login', async (_req, res) => {
   try {
     const result = await openLoginWindow();
     res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+app.get('/api/me', async (req, res) => {
+  try {
+    res.json(await getProfile(req.query.refresh === '1'));
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+app.post('/api/logout', async (_req, res) => {
+  try {
+    await logout();
+    res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: String(err?.message || err) });
   }
@@ -68,7 +91,45 @@ app.get('/api/venue', async (req, res) => {
   if (!url) return res.status(400).json({ error: 'Missing url' });
   try {
     const data = await getVenueMenu(url);
+    data.checkedAt = new Date().toISOString();
+    updateIfSaved(url, data, data.checkedAt);
     res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+app.get('/api/saved', (_req, res) => {
+  res.json({ saved: listSaved(), max: MAX_SAVED });
+});
+
+app.post('/api/saved', (req, res) => {
+  const { venue, menu } = req.body || {};
+  if (!venue?.url || !menu) return res.status(400).json({ error: 'Missing venue or menu' });
+  try {
+    const entry = saveMenu(
+      { url: venue.url, name: venue.name || '', address: venue.address || '' },
+      menu,
+      menu.checkedAt,
+    );
+    res.json(entry);
+  } catch (err) {
+    res.status(409).json({ error: String(err?.message || err) });
+  }
+});
+
+app.delete('/api/saved', (req, res) => {
+  const url = String(req.query.url || '').trim();
+  if (!url) return res.status(400).json({ error: 'Missing url' });
+  removeSaved(url);
+  res.json({ ok: true });
+});
+
+app.get('/api/beer', async (req, res) => {
+  const url = String(req.query.url || '').trim();
+  if (!url) return res.status(400).json({ error: 'Missing url' });
+  try {
+    res.json(await getBeer(url));
   } catch (err) {
     res.status(500).json({ error: String(err?.message || err) });
   }

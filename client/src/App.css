@@ -8,6 +8,7 @@
   --good: #4ade80;
   --bad: #f87171;
   --border: #2d2e33;
+  --header-bg: #2a2312;
 }
 
 * { box-sizing: border-box; }
@@ -25,18 +26,63 @@ body {
   padding: 24px 16px 64px;
 }
 
+/* Full-bleed band: the shadow paints the colour out to the screen edges and
+   clip-path trims it back to the header's own height. */
 header.top {
+  position: relative;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: -24px 0 24px;
+  padding: 14px 0 16px;
+  background: var(--header-bg);
+  box-shadow: 0 0 0 100vmax var(--header-bg);
+  clip-path: inset(0 -100vmax);
+}
+header.top::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 0 100vmax var(--accent);
+  clip-path: inset(0 -100vmax);
+}
+/* Username stacked above the action button, both right-aligned. */
+.header-actions {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
 }
 
-header.top h1 {
+header.top h1.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 0;
-  font-size: 22px;
-  letter-spacing: 0.5px;
 }
+.logo-badge {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+}
+.logo-word {
+  font-size: 24px;
+  font-weight: 800;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  background: linear-gradient(180deg, #ffd666 0%, var(--accent) 55%, #d98e00 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+header.top .status { color: #d8cfb8; }
 
 .status {
   font-size: 13px;
@@ -73,7 +119,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   margin-bottom: 16px;
 }
 .search input {
-  flex: 1;
+  flex: 0 1 360px;
+  min-width: 0;
   padding: 10px 12px;
   border-radius: 6px;
   border: 1px solid var(--border);
@@ -127,6 +174,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin: 16px 0 12px;
 }
@@ -172,10 +220,207 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 14px;
 }
 
+.notice {
+  background: rgba(255,179,0,0.08);
+  color: #d8cfb8;
+  border: 1px solid rgba(255,179,0,0.25);
+  padding: 10px 12px;
+  border-radius: 6px;
+  margin-top: 12px;
+  font-size: 13px;
+}
+
 .empty, .loading {
   padding: 20px;
   text-align: center;
   color: var(--muted);
+}
+
+.saved-star { color: var(--accent); }
+.slot-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.beer-mug {
+  width: 1.25em;
+  height: 1.25em;
+  vertical-align: -0.3em;
+}
+.beer-mug-fill {
+  animation: beer-pour 1.8s ease-in-out infinite;
+}
+/* Pour (empty -> full), hold with foam, then fade out and start again. */
+@keyframes beer-pour {
+  0%   { transform: translateY(15px); opacity: 1; }
+  65%  { transform: translateY(0);    opacity: 1; }
+  85%  { transform: translateY(0);    opacity: 1; }
+  100% { transform: translateY(0);    opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .beer-mug-fill { animation: none; transform: translateY(5px); }
+}
+
+/* Phones: icon-only buttons on saved venue rows. */
+@media (max-width: 640px) {
+  .slot-actions .btn-label { display: none; }
+  .slot-actions button { padding: 8px 11px; }
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 32px 16px;
+}
+.modal {
+  width: 100%;
+  max-width: 920px;
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.modal-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.modal-head-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.modal-toolbar { margin: 12px 0 0; }
+.modal-title { flex: 1; font-size: 17px; font-weight: 600; min-width: 0; }
+.venue-logo {
+  width: 48px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: #fff;
+  flex-shrink: 0;
+}
+.venue-logo.placeholder {
+  background: var(--panel-2);
+  border: 1px dashed var(--border);
+}
+button.star {
+  background: transparent;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
+  padding: 4px 6px;
+}
+button.star.on { color: var(--accent); }
+.modal-sub { font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 4px; }
+.modal-body {
+  padding: 4px 16px 24px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.modal-body > .results, .modal-body > .error { margin-top: 12px; }
+
+/* Small modals stay a centred card at every size. */
+.modal.small { max-width: 420px; }
+.modal-backdrop:has(.modal.small) { align-items: center; }
+
+/* Phones: full-size modals take the whole screen. */
+@media (max-width: 640px) {
+  .modal-backdrop:not(:has(.modal.small)) { padding: 0; }
+  .modal:not(.small) { max-height: 100dvh; height: 100dvh; border-radius: 0; border: 0; }
+}
+
+.status-btn {
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  cursor: pointer;
+}
+.status-btn:hover { text-decoration: underline; }
+
+button.danger {
+  background: rgba(248,113,113,0.15);
+  color: var(--bad);
+  border: 1px solid rgba(248,113,113,0.4);
+}
+
+.profile { text-align: center; padding-top: 16px; }
+.profile-avatar {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 3px solid var(--accent);
+}
+.profile-name { font-size: 18px; font-weight: 700; margin-top: 10px; }
+.profile-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.profile-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 16px;
+}
+.profile-stat {
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 4px;
+}
+.profile-stat-value { font-size: 16px; font-weight: 700; color: var(--accent); }
+.profile-stat-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+}
+.profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+/* Links that should look like buttons (e.g. hand-off to Untappd). */
+a.button {
+  display: inline-block;
+  background: var(--accent);
+  color: #1a1a1a;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 13.33px;
+  text-decoration: none;
+}
+a.button.secondary {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.beer-facts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.beer-desc {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #d4d4d4;
+  margin: 14px 0 0;
 }
 
 .beer-left { flex: 1; min-width: 0; }

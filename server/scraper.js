@@ -24,9 +24,14 @@ let browser = null;
 let context = null;
 let lastDebugHtml = '';
 
-// Cache of beer IDs the user has checked in to. Populated lazily.
+// Cache of beer IDs the user has checked in to. Populated lazily, and mirrored
+// to disk so a restart doesn't force a full (slow) re-scan.
 let hadBeerIds = null;
 let hadUsername = null;
+const HAD_FILE = path.join(USER_DATA_DIR, 'had-beers.json');
+
+// Venues without a menu get one built from check-ins this recent.
+const CHECKIN_WINDOW_DAYS = 7;
 
 function findChrome() {
   for (const p of CHROME_CANDIDATES) {
@@ -191,8 +196,18 @@ async function getUsername(ctx) {
  * Scrape the user's entire beer history. Returns a Set of beer IDs (as strings).
  * Uses the /user/<name>/beers page and repeatedly clicks "Show More".
  */
+// Had-beer IDs if we already know them (memory, then disk) — never scrapes.
+function knownHadBeerIds() {
+  if (hadBeerIds) return hadBeerIds;
+  try {
+    const { ids } = JSON.parse(fs.readFileSync(HAD_FILE, 'utf8'));
+    if (Array.isArray(ids)) hadBeerIds = new Set(ids);
+  } catch { /* not cached yet */ }
+  return hadBeerIds;
+}
+
 async function loadHadBeerIds(ctx, force = false) {
-  if (hadBeerIds && !force) return hadBeerIds;
+  if (!force && knownHadBeerIds()) return hadBeerIds;
   const username = await getUsername(ctx);
   const page = await ctx.newPage();
   try {
@@ -237,9 +252,131 @@ async function loadHadBeerIds(ctx, force = false) {
 
     hadBeerIds = new Set(ids);
     console.log(`[scraper] loaded ${hadBeerIds.size} had-beer IDs for ${username}`);
+    try {
+      fs.writeFileSync(HAD_FILE, JSON.stringify({ username, ids, savedAt: new Date().toISOString() }));
+    } catch (err) {
+      console.log('[scraper] could not cache had-beer IDs:', err.message);
+    }
     return hadBeerIds;
   } finally {
     await page.close().catch(() => {});
+  }
+}
+
+const beerCache = new Map(); // url -> { data, fetchedAt }
+const BEER_TTL_MS = 30 * 60 * 1000;
+
+/** The useful bits of an Untappd beer page, without the feed and ads. */
+export async function getBeer(beerUrl) {
+  if (!/^https?:\/\/(www\.)?untappd\.com\/b\//i.test(beerUrl)) {
+    throw new Error('Not an Untappd beer URL');
+  }
+  const hit = beerCache.get(beerUrl);
+  if (hit && Date.now() - hit.fetchedAt < BEER_TTL_MS) return hit.data;
+
+  const ctx = await getContext();
+  const page = await ctx.newPage();
+  try {
+    await goSafely(page, beerUrl);
+    const data = await page.evaluate(() => {
+      const text = (sel) => (document.querySelector(sel)?.textContent || '').replace(/\s+/g, ' ').trim();
+      // The "read-less" block holds the full description; "read-more" is the truncated one.
+      const descEl = document.querySelector('.beer-descrption-read-less')
+        || document.querySelector('.beer-descrption-read-more');
+      const description = descEl
+        ? descEl.textContent.replace(/Show (More|Less)\s*$/i, '').replace(/\s+/g, ' ').trim()
+        : '';
+      const caps = document.querySelector('.details .caps[data-rating]');
+      const rating = caps ? parseFloat(caps.getAttribute('data-rating')) : NaN;
+      const raters = text('.details .raters').match(/[\d,]+/);
+      const ibu = text('.details .ibu');
+      // e.g. <p><span class="stat">Total (?)</span><span class="count">117</span></p>
+      const stats = Array.from(document.querySelectorAll('.stats p')).map((p) => ({
+        label: (p.querySelector('.stat')?.textContent || '').replace(/\(\?\)/, '').trim(),
+        value: (p.querySelector('.count')?.textContent || '').trim(),
+      })).filter((s) => s.label && s.value);
+      return {
+        name: text('.content .name h1'),
+        brewery: text('.content .name .brewery'),
+        style: text('.content .name .style'),
+        abv: text('.details .abv'),
+        ibu: /N\/A/i.test(ibu) ? '' : ibu,
+        rating: Number.isNaN(rating) || rating === 0 ? null : rating,
+        raters: raters ? raters[0] : '',
+        description,
+        label: document.querySelector('.content .label img, a.label img')?.getAttribute('src') || '',
+        stats,
+      };
+    });
+    const id = (beerUrl.match(/\/b\/[^/?#]+\/(\d+)/) || [])[1] || '';
+    const beer = { url: beerUrl, id, ...data };
+    beerCache.set(beerUrl, { data: beer, fetchedAt: Date.now() });
+    return beer;
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+let profileCache = null;
+const PROFILE_TTL_MS = 10 * 60 * 1000;
+
+/** Avatar, display name and headline stats from the user's Untappd profile. */
+export async function getProfile(force = false) {
+  if (!force && profileCache && Date.now() - profileCache.fetchedAt < PROFILE_TTL_MS) {
+    return profileCache;
+  }
+  const ctx = await getContext();
+  const username = await getUsername(ctx);
+  const page = await ctx.newPage();
+  try {
+    await goSafely(page, `https://untappd.com/user/${encodeURIComponent(username)}`);
+    const profile = await page.evaluate(() => {
+      const text = (sel) => (document.querySelector(sel)?.textContent || '').trim();
+      // e.g. <a><span class="stat">4,021</span><span class="title">Unique</span></a>
+      const stats = Array.from(document.querySelectorAll('.user-info .stats a')).map((a) => ({
+        label: (a.querySelector('.title')?.textContent || '').trim(),
+        value: (a.querySelector('.stat')?.textContent || '').trim(),
+      }));
+      return {
+        name: text('.user-info .info h1'),
+        location: text('.user-info .location'),
+        avatar: document.querySelector('.user-info .avatar-holder img')?.getAttribute('src') || '',
+        stats,
+      };
+    });
+    profileCache = { username, ...profile, fetchedAt: Date.now() };
+    return profileCache;
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+/** Sign the shared Chrome out of Untappd and forget everything tied to the user. */
+export async function logout() {
+  const ctx = await getContext();
+  const page = await ctx.newPage();
+  try {
+    await page.goto('https://untappd.com/logout', { waitUntil: 'domcontentloaded', timeout: 30000 })
+      .catch(() => {});
+  } finally {
+    await page.close().catch(() => {});
+  }
+  // Belt and braces: drop the session cookies isLoggedIn() looks for, but keep
+  // Cloudflare's clearance cookie so the next login isn't challenged.
+  await ctx.clearCookies({ name: /^untappd_(user|session)_/i }).catch(() => {});
+  hadUsername = null;
+  hadBeerIds = null;
+  profileCache = null;
+  try { fs.unlinkSync(HAD_FILE); } catch { /* not cached */ }
+  console.log('[scraper] logged out of Untappd');
+}
+
+// Cached after the first lookup, so only the first call visits Untappd.
+export async function currentUsername() {
+  try {
+    return await getUsername(await getContext());
+  } catch {
+    return null;
   }
 }
 
@@ -312,6 +449,108 @@ export async function searchVenues(query) {
   }
 }
 
+/**
+ * Build a pseudo-menu from a venue's recent check-ins (for unverified venues
+ * that have no menu). Untappd serves the activity feed 25 at a time via
+ * "Show More" and stops after ~275, so we stop paging once we're past the window.
+ */
+async function getCheckinMenu(page, venueUrl) {
+  const activityUrl = `${venueUrl.replace(/[?#].*$/, '').replace(/\/+$/, '')}/activity`;
+  await goSafely(page, activityUrl);
+  const cutoff = Date.now() - CHECKIN_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+  const items = page.locator('[id^="checkin_"]');
+  for (let i = 0; i < 12; i++) {
+    const n = await items.count();
+    if (!n) break;
+    const oldest = await items
+      .nth(n - 1)
+      .locator('a.time[data-gregtime]')
+      .getAttribute('data-gregtime', { timeout: 2000 })
+      .catch(() => null);
+    if (oldest && Date.parse(oldest) < cutoff) break;
+    const btn = page.locator('a.more_checkins:visible').first();
+    if (!(await btn.count())) break;
+    try { await btn.click({ timeout: 3000 }); } catch { break; }
+    const grew = await page
+      .waitForFunction(
+        (prev) => document.querySelectorAll('[id^="checkin_"]').length > prev,
+        n,
+        { timeout: 8000 },
+      )
+      .then(() => true)
+      .catch(() => false);
+    if (!grew) break;
+  }
+
+  lastDebugHtml = await page.content();
+
+  // Feed items read "<user> is drinking a <beer> by <brewery> at <venue>".
+  const checkins = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('[id^="checkin_"]')).map((el) => {
+      const links = Array.from(el.querySelectorAll('.checkin p.text a:not(.user)'));
+      const beerA = links.find((a) => /^\/b\//.test(a.getAttribute('href') || ''));
+      if (!beerA) return null;
+      const href = beerA.getAttribute('href');
+      const m = href.match(/\/b\/[^/?#]+\/(\d+)/);
+      if (!m) return null;
+      const breweryA = links[links.indexOf(beerA) + 1];
+      const brewery = breweryA && !/^\/v\//.test(breweryA.getAttribute('href') || '')
+        ? breweryA.textContent.trim()
+        : '';
+      const img = el.querySelector('a.label img');
+      const caps = el.querySelector('.caps[data-rating]');
+      const r = caps ? parseFloat(caps.getAttribute('data-rating')) : NaN;
+      const t = el.querySelector('a.time[data-gregtime]');
+      return {
+        id: m[1],
+        name: beerA.textContent.trim(),
+        url: `https://untappd.com${href}`,
+        brewery,
+        label: img ? img.getAttribute('src') || '' : '',
+        rating: Number.isNaN(r) || r === 0 ? null : r,
+        time: t ? t.getAttribute('data-gregtime') : null,
+      };
+    }).filter(Boolean),
+  );
+
+  // One tile per beer: most recent sighting, check-in count, average rating.
+  const had = knownHadBeerIds();
+  const byId = new Map();
+  for (const c of checkins) {
+    const t = Date.parse(c.time);
+    if (Number.isNaN(t) || t < cutoff) continue;
+    let b = byId.get(c.id);
+    if (!b) {
+      b = {
+        id: c.id, name: c.name, brewery: c.brewery, style: '', abv: '', ibu: '',
+        label: c.label, url: c.url, had: !!had?.has(c.id),
+        lastSeen: new Date(t).toISOString(), checkins: 0, ratingSum: 0, ratingCount: 0,
+      };
+      byId.set(c.id, b);
+    }
+    b.checkins++;
+    if (t > Date.parse(b.lastSeen)) b.lastSeen = new Date(t).toISOString();
+    if (c.rating) { b.ratingSum += c.rating; b.ratingCount++; }
+  }
+  const beers = [...byId.values()]
+    .map(({ ratingSum, ratingCount, ...b }) => ({
+      ...b,
+      rating: ratingCount ? Math.round((ratingSum / ratingCount) * 100) / 100 : null,
+    }))
+    .sort((a, b) => Date.parse(b.lastSeen) - Date.parse(a.lastSeen));
+
+  console.log(
+    `[scraper] check-in menu: ${checkins.length} check-ins scanned, ${beers.length} beers in last ${CHECKIN_WINDOW_DAYS} days`,
+  );
+  return {
+    sections: beers.length
+      ? [{ name: `Recent check-ins (last ${CHECKIN_WINDOW_DAYS} days)`, beers }]
+      : [],
+    hadKnown: !!had,
+  };
+}
+
 export async function getVenueMenu(venueUrl) {
   if (!/^https?:\/\/(www\.)?untappd\.com\/v\//i.test(venueUrl)) {
     throw new Error('Not an Untappd venue URL');
@@ -337,9 +576,11 @@ export async function getVenueMenu(venueUrl) {
     const info = await page.evaluate(() => {
       const nameEl = document.querySelector('.venue-name h1, .venue h1, h1');
       const addrEl = document.querySelector('.venue-address, .address, p.address');
+      const logoEl = document.querySelector('.venue-header .logo img');
       return {
         name: nameEl ? nameEl.textContent.trim() : '',
         address: addrEl ? addrEl.textContent.trim() : '',
+        logo: logoEl ? logoEl.getAttribute('src') || '' : '',
       };
     });
 
@@ -443,7 +684,18 @@ export async function getVenueMenu(venueUrl) {
     console.log(
       `[scraper] venue menu: ${sections.length} sections, ${totalBeers} beers, ${hadBeers} had`,
     );
-    return { venue: { url: venueUrl, ...info }, sections };
+    if (!totalBeers) {
+      // Unverified venues have no menu — fall back to recent check-ins.
+      const fallback = await getCheckinMenu(page, venueUrl);
+      return {
+        venue: { url: venueUrl, ...info },
+        sections: fallback.sections,
+        source: 'checkins',
+        windowDays: CHECKIN_WINDOW_DAYS,
+        hadKnown: fallback.hadKnown,
+      };
+    }
+    return { venue: { url: venueUrl, ...info }, sections, source: 'menu' };
   } finally {
     await page.close().catch(() => {});
   }
