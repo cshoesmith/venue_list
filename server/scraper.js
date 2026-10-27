@@ -369,7 +369,8 @@ export async function getVenueMenu(venueUrl) {
         const emEl = info.querySelector('h5 em');
         const style = emEl ? (emEl.textContent || '').trim() : '';
 
-        const breweryEl = info.querySelector('h6 a[href*="/w/"], a[href*="/w/"]');
+        // Brewery links are e.g. href="/Future_Brewing" data-href=":brewery".
+        const breweryEl = info.querySelector('a[data-href=":brewery"], h6 a[href*="/w/"], a[href*="/w/"]');
         const brewery = breweryEl ? (breweryEl.textContent || '').trim() : '';
 
         const blockText = (info.innerText || '').slice(0, 600);
