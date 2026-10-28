@@ -31,13 +31,17 @@ export function listSaved() {
   return load();
 }
 
-// Entry shape: { venue: {url, name, address}, menu, checkedAt }
+// Entry shape: { venue: {url, name, address}, menu, checkedAt, addedAt, opens }
+// (venues saved before addedAt existed have none; their list position stands in.)
 export function saveMenu(venue, menu, checkedAt) {
   const list = load();
-  const entry = { venue, menu, checkedAt: checkedAt || new Date().toISOString() };
+  const entry = {
+    venue, menu, checkedAt: checkedAt || new Date().toISOString(),
+    addedAt: new Date().toISOString(), opens: 0,
+  };
   const i = list.findIndex((e) => e.venue.url === venue.url);
   if (i >= 0) {
-    list[i] = entry;
+    list[i] = { ...entry, addedAt: list[i].addedAt, opens: list[i].opens || 0 };
   } else {
     if (list.length >= MAX_SAVED) {
       throw new Error(`You can save up to ${MAX_SAVED} menus. Remove one first.`);
@@ -66,6 +70,16 @@ export function markHadInSaved(hadIds) {
   }
   if (changed) store(list);
   return changed;
+}
+
+// Counts a visit to a saved venue (for the Popular sort). Returns the new count.
+export function countOpen(url) {
+  const list = load();
+  const entry = list.find((e) => e.venue.url === url);
+  if (!entry) return null;
+  entry.opens = (entry.opens || 0) + 1;
+  store(list);
+  return entry.opens;
 }
 
 // Called after every fresh scrape: if this venue is saved, refresh its cache.

@@ -278,6 +278,33 @@ button.star.small { font-size: 18px; padding: 2px 4px; }
   margin: 24px 0 8px;
 }
 .saved-head .section-title { margin: 0; }
+.saved-tools { display: flex; gap: 6px; flex-shrink: 0; }
+/* A native select (the phone's own picker) dressed as a secondary button. */
+.sort-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+.sort-pick select {
+  appearance: none;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  font: inherit;
+  field-sizing: content; /* as wide as the chosen option, not the longest */
+  padding: 8px 6px 8px 0;
+  cursor: pointer;
+}
+.sort-pick select option { background: var(--panel); color: var(--text); }
+.sort-pick:has(select:disabled) { opacity: 0.5; cursor: not-allowed; }
 .slot-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .beer-mug {
   width: 1.25em;

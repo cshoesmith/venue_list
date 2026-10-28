@@ -20,7 +20,7 @@ import {
   getBeer,
   getSessionInfo,
 } from './scraper.js';
-import { listSaved, saveMenu, removeSaved, updateIfSaved, markHadInSaved, MAX_SAVED } from './saved.js';
+import { listSaved, saveMenu, removeSaved, updateIfSaved, markHadInSaved, countOpen, MAX_SAVED } from './saved.js';
 import { listSectionFavs, setSectionFavs } from './sectionFavs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -130,6 +130,12 @@ app.delete('/api/saved', (req, res) => {
   if (!url) return res.status(400).json({ error: 'Missing url' });
   removeSaved(url);
   res.json({ ok: true });
+});
+
+app.post('/api/saved/open', (req, res) => {
+  const url = String(req.body?.url || '').trim();
+  if (!url) return res.status(400).json({ error: 'Missing url' });
+  res.json({ url, opens: countOpen(url) });
 });
 
 app.get('/api/section-favs', (_req, res) => {

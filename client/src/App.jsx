@@ -66,6 +66,33 @@ function shortDate(iso, withTime = false) {
     : { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+const VENUE_SORTS = {
+  popular: 'Popular',
+  added: 'Date added',
+  name: 'Alphabetical',
+  rating: 'Avg beer rating',
+};
+
+const venueName = (e) => e.menu?.venue?.name || e.venue.name || '';
+
+// Mean rating of the menu's rated beers, or null when none are rated.
+function avgRating(entry) {
+  const r = (entry.menu?.sections || []).flatMap((s) => s.beers)
+    .map((b) => Number(b.rating)).filter((n) => n > 0);
+  return r.length ? r.reduce((a, b) => a + b, 0) / r.length : null;
+}
+
+// The server keeps saved venues in the order they were added, so that order
+// is "Date added" and breaks every tie (sort is stable).
+function sortVenues(list, by) {
+  const cmp = {
+    popular: (a, b) => (b.opens || 0) - (a.opens || 0),
+    name: (a, b) => venueName(a).localeCompare(venueName(b), undefined, { sensitivity: 'base' }),
+    rating: (a, b) => (avgRating(b) ?? -1) - (avgRating(a) ?? -1),
+  }[by];
+  return cmp ? [...list].sort(cmp) : list;
+}
+
 // "21 Nov 2026 (in 24 days)" for a cookie expiry.
 function expiryText(iso, now) {
   if (!iso) return 'not set';
@@ -185,7 +212,8 @@ export default function App() {
   const [beer, setBeer] = useState(null); // tile data for the open beer modal
   const [beerInfo, setBeerInfo] = useState(null); // full details from /api/beer
   const [beerError, setBeerError] = useState('');
-  const [query, setQuery] = useState(persisted.query || '');
+  const [query, setQuery] = useState('');
+  const [searchedFor, setSearchedFor] = useState('');
   const [venues, setVenues] = useState([]);
   const [showVenues, setShowVenues] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -197,6 +225,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [saved, setSaved] = useState([]);
   const [savedMax, setSavedMax] = useState(20);
+  const [venueSort, setVenueSort] = useState(VENUE_SORTS[persisted.venueSort] ? persisted.venueSort : 'added');
   const [refreshing, setRefreshing] = useState({}); // url -> true while a saved tile reloads
   const [refreshAll, setRefreshAll] = useState(null); // { done, total } while refreshing every saved venue
   const stopAll = useRef(false); // read inside the running loop
@@ -217,8 +246,8 @@ export default function App() {
 
   // Only remember preferences; every visit starts on the home page.
   useEffect(() => {
-    savePersisted({ query, filter });
-  }, [query, filter]);
+    savePersisted({ filter, venueSort });
+  }, [filter, venueSort]);
 
   const refreshStatus = async () => {
     try {
@@ -272,6 +301,7 @@ export default function App() {
 
   const savedEntry = (url) => saved.find((e) => e.venue.url === url);
   const isSaved = !!(selected && savedEntry(selected.url));
+  const sortedSaved = useMemo(() => sortVenues(saved, venueSort), [saved, venueSort]);
 
   // Each venue opens with its sections in their default state.
   useEffect(() => { setSectionOpen({}); }, [selected?.url]);
@@ -308,6 +338,15 @@ export default function App() {
     setMenuFrom(from);
     setSelected(entry.venue);
     setMenu({ ...entry.menu, checkedAt: entry.checkedAt });
+    // Count the visit for the Popular sort; a missed count isn't worth an error.
+    setSaved((list) => list.map((e) => (
+      e.venue.url === entry.venue.url ? { ...e, opens: (e.opens || 0) + 1 } : e
+    )));
+    api('/api/saved/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: entry.venue.url }),
+    }).catch(() => {});
   };
 
   const closeMenu = () => {
@@ -364,7 +403,7 @@ export default function App() {
     if (refreshAll) { stopAll.current = true; setStopping(true); return; }
     stopAll.current = false;
     setError('');
-    const list = saved.map((e) => ({ url: e.venue.url, name: e.menu?.venue?.name || e.venue.name }));
+    const list = sortedSaved.map((e) => ({ url: e.venue.url, name: venueName(e) }));
     const failed = [];
     for (let i = 0; i < list.length && !stopAll.current; i++) {
       setRefreshAll({ done: i, total: list.length });
@@ -516,10 +555,13 @@ export default function App() {
 
   const doSearch = async (e) => {
     e?.preventDefault?.();
-    if (!query.trim()) return;
+    const q = query.trim();
+    if (!q) return;
+    // The box empties once used; the results keep the term in their title.
+    setSearchedFor(q); setQuery(''); searchInput.current?.blur();
     setError(''); setSearching(true); setVenues([]); setShowVenues(true);
     try {
-      const { venues } = await api(`/api/venues?q=${encodeURIComponent(query)}`);
+      const { venues } = await api(`/api/venues?q=${encodeURIComponent(q)}`);
       setVenues(venues);
     } catch (e) {
       setError(e.message);
@@ -666,26 +708,48 @@ export default function App() {
       {!!saved.length && (
         <div className="saved-head">
           <div className="section-title">Saved venues ({saved.length}/{savedMax})</div>
-          <button
-            type="button"
-            className="secondary"
-            title={refreshAll ? 'Stop after the current venue' : 'Fetch the latest menu for every saved venue'}
-            disabled={!loggedIn || stopping}
-            onClick={refreshAllSaved}
-          >
-            {refreshAll ? (
-              <><BeerMug /> {refreshAll.done + 1}/{refreshAll.total} · {stopping ? 'Stopping…' : 'Stop'}</>
-            ) : (
-              '↻ Refresh all'
-            )}
-          </button>
+          <div className="saved-tools">
+            <label className="sort-pick" title="Sort saved venues">
+              <span aria-hidden="true">⇅</span>
+              <select
+                aria-label="Sort saved venues"
+                value={venueSort}
+                disabled={!!refreshAll}
+                onChange={(ev) => { setVenueSort(ev.target.value); ev.target.blur(); }}
+              >
+                {Object.entries(VENUE_SORTS).map(([k, label]) => (
+                  <option key={k} value={k}>{label}</option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="secondary"
+              title={refreshAll ? 'Stop after the current venue' : 'Fetch the latest menu for every saved venue'}
+              disabled={!loggedIn || stopping}
+              onClick={refreshAllSaved}
+            >
+              {refreshAll ? (
+                <><BeerMug /> {refreshAll.done + 1}/{refreshAll.total} · {stopping ? 'Stopping…' : 'Stop'}</>
+              ) : (
+                '↻ Refresh all'
+              )}
+            </button>
+          </div>
         </div>
       )}
       <div className="results" hidden={!saved.length}>
-        {saved.map((e) => {
+        {sortedSaved.map((e) => {
           const beers = (e.menu?.sections || []).flatMap((s) => s.beers);
           const newCount = beers.filter((b) => !b.had).length;
           const logo = e.menu?.venue?.logo;
+          const avg = venueSort === 'rating' ? avgRating(e) : null;
+          // The figure the list is sorted by, so the order explains itself.
+          const sortNote = {
+            popular: `Views ${e.opens || 0}`,
+            added: e.addedAt && `added ${shortDate(e.addedAt)}`,
+            rating: avg ? `★ ${avg.toFixed(2)} avg` : 'no ratings',
+          }[venueSort];
           return (
             <div key={e.venue.url} className="row" data-url={e.venue.url} onClick={() => openSaved(e)}>
               {logo ? (
@@ -694,10 +758,11 @@ export default function App() {
                 <div className="venue-logo placeholder" />
               )}
               <div className="beer-left">
-                <div className="name">{e.menu?.venue?.name || e.venue.name}</div>
+                <div className="name">{venueName(e)}</div>
                 <div className="address">
                   Last checked: {timeAgo(e.checkedAt, now)} · {beers.length} beers, {newCount} new
                   {e.menu?.source === 'checkins' && ' · from check-ins'}
+                  {sortNote && ` · ${sortNote}`}
                 </div>
               </div>
               <div className="slot-actions">
@@ -850,7 +915,7 @@ export default function App() {
       )}
 
       {showVenues && (
-        <Modal title={`Venues matching “${query}”`} onClose={() => { setShowVenues(false); setError(''); }}>
+        <Modal title={`Venues matching “${searchedFor}”`} onClose={() => { setShowVenues(false); setError(''); }}>
           {error && <div className="error">{error}</div>}
           {searching && <div className="loading">Searching…</div>}
           {!searching && !error && !venues.length && <div className="empty">No venues found.</div>}
