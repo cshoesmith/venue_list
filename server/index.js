@@ -10,7 +10,8 @@ import {
   isLoggedIn,
   shutdown,
   getLastDebug,
-  refreshHadBeers,
+  startHadRefresh,
+  getHadProgress,
   currentUsername,
   getProfile,
   logout,
@@ -153,13 +154,13 @@ app.get('/api/debug/last', (_req, res) => {
   res.type('html').send(getLastDebug() || '<em>no debug html captured yet</em>');
 });
 
-app.post('/api/refresh-had', async (_req, res) => {
-  try {
-    const result = await refreshHadBeers();
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: String(err?.message || err) });
-  }
+// Starts the beer-history scan and returns at once; poll GET for progress.
+app.post('/api/refresh-had', (req, res) => {
+  res.json(startHadRefresh({ full: !!req.body?.full }));
+});
+
+app.get('/api/refresh-had', (_req, res) => {
+  res.json(getHadProgress());
 });
 
 // Serve the built React client (if present) and fall back to index.html

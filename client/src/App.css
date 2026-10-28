@@ -411,6 +411,36 @@ button.danger {
   letter-spacing: 0.04em;
   margin-top: 2px;
 }
+.uniques-count { font-size: 40px; font-weight: 800; color: var(--accent); line-height: 1.1; }
+.uniques-note { font-size: 13px; color: var(--muted); margin-top: 10px; }
+.uniques-progress { text-align: center; padding: 20px 0 4px; }
+.uniques-label { font-size: 14px; }
+.progress {
+  height: 10px;
+  margin-top: 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+.progress.indeterminate .progress-fill {
+  width: 30%;
+  animation: progress-slide 1.2s ease-in-out infinite;
+}
+@keyframes progress-slide {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(340%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress.indeterminate .progress-fill { animation: none; width: 100%; opacity: 0.4; }
+}
+
 .session-info {
   margin-top: 16px;
   padding: 10px 12px;

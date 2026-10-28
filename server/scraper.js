@@ -250,10 +250,6 @@ async function getUsername(ctx) {
   }
 }
 
-/**
- * Scrape the user's entire beer history. Returns a Set of beer IDs (as strings).
- * Uses the /user/<name>/beers page and repeatedly clicks "Show More".
- */
 // Had-beer IDs if we already know them (memory, then disk) — never scrapes.
 function knownHadBeerIds() {
   if (hadBeerIds) return hadBeerIds;
@@ -264,61 +260,147 @@ function knownHadBeerIds() {
   return hadBeerIds;
 }
 
-async function loadHadBeerIds(ctx, force = false) {
-  if (!force && knownHadBeerIds()) return hadBeerIds;
-  const username = await getUsername(ctx);
+const HAD_PAGE_SIZE = 25;
+const HAD_GAP_MS = 300; // pause between history pages
+const HAD_MAX_RETRIES = 8; // per page, when Untappd says 429
+const HAD_MAX_WAIT_MS = 60 * 1000;
+// Bumped when the cache's contents change meaning; older caches get a full re-read
+// (v1 counted every beer link on the page, sidebars included).
+const HAD_FILE_VERSION = 2;
+
+function hadFileVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(HAD_FILE, 'utf8')).v ?? 1;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the user's beer history into a Set of beer IDs. Calls the endpoint
+ * behind the beers page's "Show More" (25 beers per offset, most recent
+ * first) directly, one at a time: Untappd answers 429 to bursts, and then
+ * the scan waits and retries.
+ *
+ * Starting from `known` IDs, it stops once it holds `target` beers (the
+ * profile's Unique count) or, without a target, at the first page that adds
+ * nothing new, so an update reads only as far back as the last one.
+ *
+ * onProgress({ size, waitUntil }): waitUntil is set while backing off.
+ */
+async function loadHadBeerIds(ctx, username, { known, target }, onProgress) {
   const page = await ctx.newPage();
   try {
+    // Loading the page first gets past Cloudflare and gives fetch() Untappd's cookies.
     await goSafely(page, `https://untappd.com/user/${encodeURIComponent(username)}/beers`);
+    const ids = new Set(known || []);
+    // The first 25 come with the page; the endpoint serves offsets from 25 on.
+    const first = await page.$$eval('.beer-item[data-bid]', (els) => els.map((el) => el.getAttribute('data-bid')));
+    let before = ids.size;
+    first.forEach((id) => ids.add(id));
+    let done = first.length < HAD_PAGE_SIZE
+      || (target ? ids.size >= target : !!known && ids.size === before);
+    onProgress({ size: ids.size });
 
-    // Click "Show More" until it's gone or stops loading new entries.
-    let prevCount = 0;
-    for (let i = 0; i < 500; i++) {
-      const count = await page.locator('a[href*="/b/"]').count();
-      const btn = page
-        .locator('a.more_checkins, a:has-text("Show More"), button:has-text("Show More"), a.show-more, button.show-more')
-        .first();
-      if (!(await btn.count())) {
-        // Try infinite-scroll: scroll to bottom.
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        await page.waitForTimeout(800);
-        const newCount = await page.locator('a[href*="/b/"]').count();
-        if (newCount === count) break;
+    let failures = 0;
+    for (let offset = HAD_PAGE_SIZE; !done && offset < 100000;) {
+      const url = `/profile/more_beer/${encodeURIComponent(username)}/${offset}?sort=date`;
+      const res = await page.evaluate(async (url) => {
+        try {
+          const r = await fetch(url, { credentials: 'include', headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+          return { status: r.status, retryAfter: r.headers.get('retry-after'), html: r.ok ? await r.text() : '' };
+        } catch (err) {
+          return { status: 0, error: err.message };
+        }
+      }, url);
+
+      if (res.status !== 200) {
+        // 429 (too many requests), 5xx or a network error: back off and retry.
+        if (++failures > HAD_MAX_RETRIES) throw new Error(`${url}: HTTP ${res.status || res.error}`);
+        const waitMs = Number(res.retryAfter) > 0
+          ? Math.min(Number(res.retryAfter) * 1000, HAD_MAX_WAIT_MS)
+          : Math.min(5000 * 2 ** (failures - 1), HAD_MAX_WAIT_MS);
+        console.log(`[scraper] had-beer scan: HTTP ${res.status || res.error} at offset ${offset}, waiting ${waitMs / 1000}s`);
+        onProgress({ size: ids.size, waitUntil: new Date(Date.now() + waitMs).toISOString() });
+        await page.waitForTimeout(waitMs);
         continue;
       }
-      try {
-        await btn.scrollIntoViewIfNeeded({ timeout: 2000 });
-        await btn.click({ timeout: 2500 });
-      } catch {
-        break;
-      }
-      await page.waitForTimeout(600);
-      const newCount = await page.locator('a[href*="/b/"]').count();
-      if (newCount === prevCount && newCount === count) break;
-      prevCount = newCount;
-    }
+      failures = 0;
 
-    const ids = await page.evaluate(() => {
-      const set = new Set();
-      document.querySelectorAll('a[href*="/b/"]').forEach((a) => {
-        const href = a.getAttribute('href') || '';
-        const m = href.match(/\/b\/[^/?#]+\/(\d+)/);
-        if (m) set.add(m[1]);
-      });
-      return Array.from(set);
-    });
-
-    hadBeerIds = new Set(ids);
-    console.log(`[scraper] loaded ${hadBeerIds.size} had-beer IDs for ${username}`);
-    try {
-      fs.writeFileSync(HAD_FILE, JSON.stringify({ username, ids, savedAt: new Date().toISOString() }));
-    } catch (err) {
-      console.log('[scraper] could not cache had-beer IDs:', err.message);
+      // e.g. <div class="beer-item" data-bid="97996">
+      const pageIds = [...res.html.matchAll(/class="beer-item"[^>]*data-bid="(\d+)"/g)].map((m) => m[1]);
+      before = ids.size;
+      pageIds.forEach((id) => ids.add(id));
+      if (pageIds.length < HAD_PAGE_SIZE) done = true; // a short page is the last one
+      if (target ? ids.size >= target : !!known && ids.size === before) done = true; // caught up
+      onProgress({ size: ids.size });
+      offset += HAD_PAGE_SIZE;
+      if (!done) await page.waitForTimeout(HAD_GAP_MS);
     }
-    return hadBeerIds;
+    return ids;
   } finally {
     await page.close().catch(() => {});
   }
+}
+
+// The current or last beer-history scan, polled by the client for its progress bar.
+let hadProgress = { running: false };
+
+export function getHadProgress() {
+  return hadProgress;
+}
+
+/**
+ * Start a beer-history scan in the background; a no-op while one is running.
+ * By default it only reads back to the last update; `full` re-reads everything.
+ * Progress counts new beers (update) or all beers (full) towards `total`.
+ */
+export function startHadRefresh({ full = false } = {}) {
+  if (hadProgress.running) return hadProgress;
+  const known = full || hadFileVersion() !== HAD_FILE_VERSION ? null : knownHadBeerIds();
+  const base = known?.size || 0;
+  hadProgress = {
+    running: true,
+    mode: known ? 'update' : 'full',
+    loaded: 0,
+    total: null,
+    previous: knownHadBeerIds()?.size ?? null,
+    startedAt: new Date().toISOString(),
+  };
+  (async () => {
+    try {
+      const ctx = await getContext();
+      const username = await getUsername(ctx);
+      hadProgress.username = username;
+      // The profile's Unique count says when to stop and sizes the progress bar.
+      let target = null;
+      try {
+        const unique = (await getProfile(true)).stats.find((s) => /unique/i.test(s.label));
+        const n = unique ? parseInt(unique.value.replace(/\D/g, ''), 10) : NaN;
+        if (n > 0) target = n;
+      } catch { /* stop on a page with nothing new; the bar stays indeterminate */ }
+      if (target) hadProgress.total = Math.max(0, target - base);
+      const ids = await loadHadBeerIds(ctx, username, { known, target }, ({ size, waitUntil }) => {
+        hadProgress.loaded = size - base;
+        hadProgress.waitUntil = waitUntil || null;
+      });
+      if (!ids.size) throw new Error('No beers found. Untappd’s page may have changed.');
+      hadBeerIds = ids;
+      console.log(`[scraper] loaded ${ids.size} had-beer IDs for ${username}`);
+      try {
+        fs.writeFileSync(HAD_FILE, JSON.stringify({
+          v: HAD_FILE_VERSION, username, ids: [...ids], savedAt: new Date().toISOString(),
+        }));
+      } catch (err) {
+        console.log('[scraper] could not cache had-beer IDs:', err.message);
+      }
+      hadProgress = { ...hadProgress, running: false, count: ids.size, finishedAt: new Date().toISOString() };
+    } catch (err) {
+      console.log('[scraper] had-beer scan failed:', err.message);
+      hadProgress = { ...hadProgress, running: false, error: String(err?.message || err) };
+    }
+  })();
+  return hadProgress;
 }
 
 const beerCache = new Map(); // url -> { data, fetchedAt }
@@ -438,11 +520,6 @@ export async function currentUsername() {
   }
 }
 
-export async function refreshHadBeers() {
-  const ctx = await getContext();
-  const ids = await loadHadBeerIds(ctx, true);
-  return { count: ids.size, username: hadUsername };
-}
 
 
 export async function searchVenues(query) {

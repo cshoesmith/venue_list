@@ -180,6 +180,8 @@ export default function App() {
   const [showProfile, setShowProfile] = useState(false);
   const [profile, setProfile] = useState(null);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [showUniques, setShowUniques] = useState(false);
+  const [uniques, setUniques] = useState(null); // { running } | { count, previous } | { error }
   const [beer, setBeer] = useState(null); // tile data for the open beer modal
   const [beerInfo, setBeerInfo] = useState(null); // full details from /api/beer
   const [beerError, setBeerError] = useState('');
@@ -247,7 +249,11 @@ export default function App() {
     }
   };
 
-  useEffect(() => { refreshStatus(); loadSaved(); loadSectionFavs(); }, []);
+  useEffect(() => {
+    refreshStatus(); loadSaved(); loadSectionFavs();
+    // Pick up a scan started earlier or on another device.
+    api('/api/refresh-had').then((p) => { if (p.running) setUniques(p); }).catch(() => {});
+  }, []);
 
   // Re-check login and re-sync saved venues and favourite sections (they may
   // have changed on another device) whenever the tab comes back into view.
@@ -446,6 +452,35 @@ export default function App() {
     }
   };
 
+  // The scan runs on the server; the modal and header button poll its progress.
+  const updateUniques = async (full = false) => {
+    setShowUniques(true);
+    if (uniques?.running) return;
+    setUniques({ running: true, loaded: 0, total: null });
+    try {
+      setUniques(await api('/api/refresh-had', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ full }),
+      }));
+    } catch (e) {
+      setUniques({ error: e.message });
+    }
+  };
+
+  useEffect(() => {
+    if (!uniques?.running) return undefined;
+    const id = setInterval(async () => {
+      try { setUniques(await api('/api/refresh-had')); } catch { /* keep polling */ }
+    }, 1000);
+    return () => clearInterval(id);
+  }, [uniques?.running]);
+
+  // null while the size of the job isn't known yet.
+  const uniquesPct = !uniques?.running || uniques.total == null ? null
+    : uniques.total === 0 ? 100
+      : Math.min(100, Math.floor((uniques.loaded / uniques.total) * 100));
+
   const doSearch = async (e) => {
     e?.preventDefault?.();
     if (!query.trim()) return;
@@ -527,7 +562,7 @@ export default function App() {
   const hasFavHere = !!menu?.sections?.some((s) => favKeys.includes(sectionKey(s.name)));
   const isExpanded = (key) => !multiSection
     || (sectionOpen[key] ?? (!hasFavHere || favKeys.includes(key)));
-  const modalOpen = showVenues || !!selected || showProfile;
+  const modalOpen = showVenues || !!selected || showProfile || showUniques;
 
   return (
     <div className="app">
@@ -559,16 +594,11 @@ export default function App() {
             <button
               className="secondary"
               title={`Re-scan ${username || 'your'} Untappd history for beers you've had`}
-              onClick={async () => {
-                setError('');
-                try {
-                  const r = await api('/api/refresh-had', { method: 'POST' });
-                  if (r.username) setUsername(r.username);
-                  alert(`Cached ${r.count} beers you've had (${r.username}).`);
-                } catch (e) { setError(e.message); }
-              }}
+              onClick={() => updateUniques()}
             >
-              Update Uniques
+              {uniques?.running
+                ? <><BeerMug /> {uniquesPct == null ? 'Updating…' : `Updating ${uniquesPct}%`}</>
+                : 'Update Uniques'}
             </button>
           )}
         </div>
@@ -715,6 +745,63 @@ export default function App() {
               {loggingOut ? 'Logging out…' : 'Log out'}
             </button>
             <button className="secondary" onClick={closeProfile}>Close</button>
+          </div>
+        </Modal>
+      )}
+
+      {showUniques && (
+        <Modal title="Update Uniques" size="small" onClose={() => setShowUniques(false)}>
+          {uniques?.running && (
+            <div className="uniques-progress">
+              <div className="uniques-label">
+                {uniques.total == null && !uniques.loaded
+                  ? 'Starting…'
+                  : uniques.mode === 'update'
+                    ? 'Checking for beers since the last update…'
+                    : `Reading ${username ? `${username}’s` : 'your'} whole beer history…`}
+              </div>
+              <div className={`progress ${uniquesPct == null ? 'indeterminate' : ''}`}>
+                <div className="progress-fill" style={uniquesPct == null ? undefined : { width: `${uniquesPct}%` }} />
+              </div>
+              <div className="uniques-note">
+                {(uniques.loaded || 0).toLocaleString()}
+                {uniques.total != null && ` of ${uniques.total.toLocaleString()}`}
+                {uniques.mode === 'update' ? ' new beers' : ' beers'}
+                {uniquesPct != null && ` · ${uniquesPct}%`}
+              </div>
+              {Date.parse(uniques.waitUntil) > Date.now() && (
+                <div className="uniques-note">
+                  Untappd asked us to slow down. Resuming in{' '}
+                  {Math.ceil((Date.parse(uniques.waitUntil) - Date.now()) / 1000)}s…
+                </div>
+              )}
+            </div>
+          )}
+          {uniques?.error && <div className="error">{uniques.error}</div>}
+          {uniques && !uniques.running && !uniques.error && uniques.count != null && (
+            <div className="profile">
+              <div className="uniques-count">{uniques.count.toLocaleString()}</div>
+              <div className="profile-sub">beers you’ve had</div>
+              <div className="uniques-note">
+                {uniques.previous == null
+                  ? 'First scan of your history.'
+                  : uniques.count === uniques.previous
+                    ? 'No change since the last update.'
+                    : `${uniques.count > uniques.previous ? '+' : ''}${(uniques.count - uniques.previous).toLocaleString()} since the last update.`}
+              </div>
+            </div>
+          )}
+          <div className="profile-actions">
+            {!uniques?.running && (
+              <button
+                className="secondary"
+                title="Re-read your whole history, e.g. after deleting check-ins"
+                onClick={() => updateUniques(true)}
+              >
+                Full rescan
+              </button>
+            )}
+            <button className="secondary" onClick={() => setShowUniques(false)}>Close</button>
           </div>
         </Modal>
       )}
