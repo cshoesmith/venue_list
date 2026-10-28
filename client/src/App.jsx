@@ -427,6 +427,7 @@ export default function App() {
   const openProfile = async () => {
     setError('');
     setShowProfile(true);
+    api('/api/refresh-had').then(setUniques).catch(() => {});
     try {
       setProfile(await api('/api/me'));
     } catch (e) {
@@ -458,7 +459,7 @@ export default function App() {
   const updateUniques = async (full = false) => {
     setShowUniques(true);
     if (uniques?.running) return;
-    setUniques({ running: true, loaded: 0, total: null });
+    setUniques((u) => ({ ...u, running: true, loaded: 0, total: null, error: undefined }));
     try {
       setUniques(await api('/api/refresh-had', {
         method: 'POST',
@@ -625,7 +626,8 @@ export default function App() {
           {loggedIn && (
             <button
               className="secondary"
-              title={`Re-scan ${username || 'your'} Untappd history for beers you've had`}
+              title={`Re-scan ${username || 'your'} Untappd history for beers you've had`
+                + (uniques?.lastUpdated ? ` (last updated ${timeAgo(uniques.lastUpdated, now)})` : '')}
               onClick={() => updateUniques()}
             >
               {uniques?.running
@@ -751,8 +753,14 @@ export default function App() {
           )}
           {profile?.session && (
             <div className="session-info">
-              <div className="session-title">Server session</div>
+              <div className="session-title">Server status</div>
               <dl>
+                <dt>Uniques</dt>
+                <dd>
+                  {uniques?.hadCount == null
+                    ? 'not scanned yet'
+                    : `${uniques.hadCount.toLocaleString()} beers · updated ${timeAgo(uniques.lastUpdated, now) || 'unknown'}`}
+                </dd>
                 <dt>Login</dt><dd>{expiryText(profile.session.login, now)}</dd>
                 <dt>Session</dt><dd>{expiryText(profile.session.session, now)}</dd>
                 <dt>Cloudflare</dt><dd>{expiryText(profile.session.cloudflare, now)}</dd>
@@ -801,6 +809,9 @@ export default function App() {
                 {uniques.mode === 'update' ? ' new beers' : ' beers'}
                 {uniquesPct != null && ` · ${uniquesPct}%`}
               </div>
+              {uniques.lastUpdated && (
+                <div className="uniques-note">Last updated {timeAgo(uniques.lastUpdated, now)}</div>
+              )}
               {Date.parse(uniques.waitUntil) > Date.now() && (
                 <div className="uniques-note">
                   Untappd asked us to slow down. Resuming in{' '}

@@ -27,6 +27,7 @@ let lastDebugHtml = '';
 // Cache of beer IDs the user has checked in to. Populated lazily, and mirrored
 // to disk so a restart doesn't force a full (slow) re-scan.
 let hadBeerIds = null;
+let hadSavedAt = null; // when the had list was last scanned successfully
 let hadUsername = null;
 const HAD_FILE = path.join(USER_DATA_DIR, 'had-beers.json');
 
@@ -254,8 +255,11 @@ async function getUsername(ctx) {
 function knownHadBeerIds() {
   if (hadBeerIds) return hadBeerIds;
   try {
-    const { ids } = JSON.parse(fs.readFileSync(HAD_FILE, 'utf8'));
-    if (Array.isArray(ids)) hadBeerIds = new Set(ids);
+    const { ids, savedAt } = JSON.parse(fs.readFileSync(HAD_FILE, 'utf8'));
+    if (Array.isArray(ids)) {
+      hadBeerIds = new Set(ids);
+      hadSavedAt = savedAt || null;
+    }
   } catch { /* not cached yet */ }
   return hadBeerIds;
 }
@@ -354,9 +358,16 @@ let checkinTimer = null;
 const CHECKIN_SCAN_EVERY_MS = 60 * 1000;
 const CHECKIN_MAX_SCANS = 3; // so the watch ends 3 minutes after the last tap
 
-// `watching` lists beers awaiting a check-in, so menus can badge them "Updating".
+// `watching` lists beers awaiting a check-in, so menus can badge them "Updating";
+// `hadCount` / `lastUpdated` describe the had list as it stands.
 export function getHadProgress() {
-  return { ...hadProgress, watching: [...pendingCheckins.keys()] };
+  const ids = knownHadBeerIds();
+  return {
+    ...hadProgress,
+    watching: [...pendingCheckins.keys()],
+    hadCount: ids?.size ?? null,
+    lastUpdated: hadSavedAt,
+  };
 }
 
 /** Called with the full Set of had-beer IDs after every successful scan. */
@@ -432,10 +443,11 @@ export function startHadRefresh({ full = false } = {}) {
       });
       if (!ids.size) throw new Error('No beers found. Untappd’s page may have changed.');
       hadBeerIds = ids;
+      hadSavedAt = new Date().toISOString();
       console.log(`[scraper] loaded ${ids.size} had-beer IDs for ${username}`);
       try {
         fs.writeFileSync(HAD_FILE, JSON.stringify({
-          v: HAD_FILE_VERSION, username, ids: [...ids], savedAt: new Date().toISOString(),
+          v: HAD_FILE_VERSION, username, ids: [...ids], savedAt: hadSavedAt,
         }));
       } catch (err) {
         console.log('[scraper] could not cache had-beer IDs:', err.message);
@@ -560,6 +572,7 @@ export async function logout() {
   await ctx.clearCookies({ name: /^untappd_(user|session)_/i }).catch(() => {});
   hadUsername = null;
   hadBeerIds = null;
+  hadSavedAt = null;
   profileCache = null;
   try { fs.unlinkSync(HAD_FILE); } catch { /* not cached */ }
   console.log('[scraper] logged out of Untappd');
