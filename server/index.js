@@ -12,13 +12,15 @@ import {
   getLastDebug,
   startHadRefresh,
   getHadProgress,
+  watchForCheckin,
+  onHadScan,
   currentUsername,
   getProfile,
   logout,
   getBeer,
   getSessionInfo,
 } from './scraper.js';
-import { listSaved, saveMenu, removeSaved, updateIfSaved, MAX_SAVED } from './saved.js';
+import { listSaved, saveMenu, removeSaved, updateIfSaved, markHadInSaved, MAX_SAVED } from './saved.js';
 import { listSectionFavs, setSectionFavs } from './sectionFavs.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -161,6 +163,20 @@ app.post('/api/refresh-had', (req, res) => {
 
 app.get('/api/refresh-had', (_req, res) => {
   res.json(getHadProgress());
+});
+
+// The user tapped a check-in link: watch their history for the beer so menus
+// show it as Had (every minute, for up to 3 minutes).
+app.post('/api/checkin', (req, res) => {
+  const beerId = String(req.body?.beerId || '');
+  console.log('[server] check-in tapped:', beerId || '(unknown beer)', req.body?.beerUrl || '');
+  res.json(watchForCheckin(beerId));
+});
+
+// Every scan marks newly-had beers in the saved menus.
+onHadScan((ids) => {
+  const changed = markHadInSaved(ids);
+  if (changed) console.log(`[server] marked ${changed} saved-menu beers as had`);
 });
 
 // Serve the built React client (if present) and fall back to index.html

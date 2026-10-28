@@ -52,6 +52,22 @@ export function removeSaved(url) {
   store(load().filter((e) => e.venue.url !== url));
 }
 
+// After an Uniques scan: mark every saved beer the user has now had. Returns
+// how many changed. (Only ever false -> true; a scrape sets the truth anyway.)
+export function markHadInSaved(hadIds) {
+  const list = load();
+  let changed = 0;
+  for (const entry of list) {
+    for (const section of entry.menu?.sections || []) {
+      for (const beer of section.beers) {
+        if (!beer.had && hadIds.has(beer.id)) { beer.had = true; changed++; }
+      }
+    }
+  }
+  if (changed) store(list);
+  return changed;
+}
+
 // Called after every fresh scrape: if this venue is saved, refresh its cache.
 export function updateIfSaved(url, menu, checkedAt) {
   const list = load();

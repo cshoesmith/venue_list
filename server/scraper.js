@@ -345,9 +345,52 @@ async function loadHadBeerIds(ctx, username, { known, target }, onProgress) {
 
 // The current or last beer-history scan, polled by the client for its progress bar.
 let hadProgress = { running: false };
+let hadJob = null; // promise of the running scan (never rejects)
+let hadScanListener = null;
 
+// Beers the user tapped check in on: beer ID -> scans left to look for it.
+const pendingCheckins = new Map();
+let checkinTimer = null;
+const CHECKIN_SCAN_EVERY_MS = 60 * 1000;
+const CHECKIN_MAX_SCANS = 3; // so the watch ends 3 minutes after the last tap
+
+// `watching` lists beers awaiting a check-in, so menus can badge them "Updating".
 export function getHadProgress() {
-  return hadProgress;
+  return { ...hadProgress, watching: [...pendingCheckins.keys()] };
+}
+
+/** Called with the full Set of had-beer IDs after every successful scan. */
+export function onHadScan(fn) {
+  hadScanListener = fn;
+}
+
+/**
+ * The user tapped check in on a beer: run an update scan once a minute until
+ * the beer shows up in their history, at most 3 times. Only ever started by a
+ * tap; nothing scans on a timer of its own. Already-had beers are ignored,
+ * since checking in again adds nothing new.
+ */
+export function watchForCheckin(beerId) {
+  if (!beerId || knownHadBeerIds()?.has(beerId)) return getHadProgress();
+  pendingCheckins.set(beerId, CHECKIN_MAX_SCANS);
+  if (!checkinTimer) scheduleCheckinScan();
+  return getHadProgress();
+}
+
+function scheduleCheckinScan() {
+  hadProgress.scheduledFor = new Date(Date.now() + CHECKIN_SCAN_EVERY_MS).toISOString();
+  checkinTimer = setTimeout(async () => {
+    if (!hadProgress.running) startHadRefresh();
+    await hadJob; // ours, or one that was already running
+    checkinTimer = null;
+    const had = knownHadBeerIds();
+    for (const [id, left] of pendingCheckins) {
+      if (had?.has(id) || left <= 1) pendingCheckins.delete(id);
+      else pendingCheckins.set(id, left - 1);
+    }
+    if (pendingCheckins.size) scheduleCheckinScan();
+    else hadProgress.scheduledFor = undefined;
+  }, CHECKIN_SCAN_EVERY_MS);
 }
 
 /**
@@ -356,18 +399,21 @@ export function getHadProgress() {
  * Progress counts new beers (update) or all beers (full) towards `total`.
  */
 export function startHadRefresh({ full = false } = {}) {
-  if (hadProgress.running) return hadProgress;
-  const known = full || hadFileVersion() !== HAD_FILE_VERSION ? null : knownHadBeerIds();
+  if (hadProgress.running) return getHadProgress();
+  const prevIds = knownHadBeerIds();
+  const known = full || hadFileVersion() !== HAD_FILE_VERSION ? null : prevIds;
   const base = known?.size || 0;
   hadProgress = {
     running: true,
     mode: known ? 'update' : 'full',
     loaded: 0,
     total: null,
-    previous: knownHadBeerIds()?.size ?? null,
+    previous: prevIds?.size ?? null,
     startedAt: new Date().toISOString(),
+    // Still watching for a check-in.
+    scheduledFor: checkinTimer ? hadProgress.scheduledFor : undefined,
   };
-  (async () => {
+  hadJob = (async () => {
     try {
       const ctx = await getContext();
       const username = await getUsername(ctx);
@@ -394,13 +440,21 @@ export function startHadRefresh({ full = false } = {}) {
       } catch (err) {
         console.log('[scraper] could not cache had-beer IDs:', err.message);
       }
-      hadProgress = { ...hadProgress, running: false, count: ids.size, finishedAt: new Date().toISOString() };
+      try { hadScanListener?.(ids); } catch (err) { console.log('[scraper] had-scan listener failed:', err.message); }
+      hadProgress = {
+        ...hadProgress,
+        running: false,
+        count: ids.size,
+        // New since the last scan, so open menus can mark them Had.
+        added: prevIds ? [...ids].filter((id) => !prevIds.has(id)) : [],
+        finishedAt: new Date().toISOString(),
+      };
     } catch (err) {
       console.log('[scraper] had-beer scan failed:', err.message);
       hadProgress = { ...hadProgress, running: false, error: String(err?.message || err) };
     }
   })();
-  return hadProgress;
+  return getHadProgress();
 }
 
 const beerCache = new Map(); // url -> { data, fetchedAt }

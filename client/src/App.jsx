@@ -251,8 +251,8 @@ export default function App() {
 
   useEffect(() => {
     refreshStatus(); loadSaved(); loadSectionFavs();
-    // Pick up a scan started earlier or on another device.
-    api('/api/refresh-had').then((p) => { if (p.running) setUniques(p); }).catch(() => {});
+    // Pick up a scan started earlier, scheduled, or run from another device.
+    api('/api/refresh-had').then(setUniques).catch(() => {});
   }, []);
 
   // Re-check login and re-sync saved venues and favourite sections (they may
@@ -263,6 +263,8 @@ export default function App() {
       refreshStatus();
       loadSaved();
       loadSectionFavs();
+      // Back from checking in: catch up on a scan that ran or is due.
+      api('/api/refresh-had').then(setUniques).catch(() => {});
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
@@ -468,13 +470,43 @@ export default function App() {
     }
   };
 
+  // Poll every second during a scan, and gently while one is scheduled after a check-in.
+  const uniquesPollMs = uniques?.running ? 1000 : uniques?.scheduledFor ? 5000 : null;
   useEffect(() => {
-    if (!uniques?.running) return undefined;
+    if (!uniquesPollMs) return undefined;
     const id = setInterval(async () => {
       try { setUniques(await api('/api/refresh-had')); } catch { /* keep polling */ }
-    }, 1000);
+    }, uniquesPollMs);
     return () => clearInterval(id);
-  }, [uniques?.running]);
+  }, [uniquesPollMs]);
+
+  // When a scan finds new beers, mark them Had in whatever is on screen. The
+  // server has already updated the saved menus.
+  useEffect(() => {
+    const added = new Set(uniques?.added || []);
+    if (!uniques?.finishedAt || !added.size) return;
+    const mark = (b) => (!b.had && added.has(b.id) ? { ...b, had: true } : b);
+    setMenu((m) => m && { ...m, sections: m.sections.map((s) => ({ ...s, beers: s.beers.map(mark) })) });
+    setBeer((b) => b && mark(b));
+    loadSaved();
+  }, [uniques?.finishedAt]);
+
+  // Beers the server is watching for a check-in: badged "Updating" until they
+  // turn up (Had) or the watch ends (back to New).
+  const watching = new Set(uniques?.watching || []);
+  const badgeOf = (b) => (b.had ? 'had' : watching.has(b.id) ? 'updating' : 'new');
+  const BADGE_TEXT = { had: 'Had', new: 'New', updating: 'Updating' };
+
+  // A check-in link was tapped: the server watches the had list for this beer.
+  const noteCheckin = (b) => {
+    if (b.had) return; // checking in again adds nothing new
+    const beerId = b.id || (b.url.match(/\/b\/[^/?#]+\/(\d+)/) || [])[1];
+    api('/api/checkin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ beerId, beerUrl: b.url }),
+    }).then(setUniques).catch(() => { /* the link still works */ });
+  };
 
   // null while the size of the job isn't known yet.
   const uniquesPct = !uniques?.running || uniques.total == null ? null
@@ -955,9 +987,7 @@ export default function App() {
                                 .join(' · ')}
                             </div>
                           </div>
-                          <span className={`badge ${b.had ? 'had' : 'new'}`}>
-                            {b.had ? 'Had' : 'New'}
-                          </span>
+                          <span className={`badge ${badgeOf(b)}`}>{BADGE_TEXT[badgeOf(b)]}</span>
                         </div>
                       ))}
                     </div>
@@ -985,7 +1015,7 @@ export default function App() {
           >
             {beerError && <div className="error">Couldn’t load full details: {beerError}</div>}
             <div className="beer-facts">
-              <span className={`badge ${beer.had ? 'had' : 'new'}`}>{beer.had ? 'Had' : 'New'}</span>
+              <span className={`badge ${badgeOf(beer)}`}>{BADGE_TEXT[badgeOf(beer)]}</span>
               {[
                 pick('abv'),
                 pick('ibu'),
@@ -1008,14 +1038,32 @@ export default function App() {
               </div>
             )}
             <div className="profile-actions">
-              <a className="button" href={beer.url} target="_blank" rel="noreferrer">
+              <a
+                className="button"
+                href={beer.url}
+                target="_blank"
+                rel="noreferrer"
+                onClick={() => noteCheckin(beer)}
+              >
                 Check in on Untappd ↗
               </a>
               {isTouch && id && (
-                <a className="button secondary" href={`untappd://beer/${id}`}>Open in app</a>
+                <a
+                  className="button secondary"
+                  href={`untappd://beer/${id}`}
+                  onClick={() => noteCheckin(beer)}
+                >
+                  Open in app
+                </a>
               )}
               <button className="secondary" onClick={closeBeer}>Close</button>
             </div>
+            {badgeOf(beer) === 'updating' && (
+              <div className="uniques-note">
+                Watching for your check-in: every minute for the next 3 minutes. This
+                menu marks the beer Had as soon as it shows up.
+              </div>
+            )}
           </Modal>
         );
       })()}

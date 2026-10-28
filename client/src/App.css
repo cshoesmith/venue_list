@@ -171,6 +171,18 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .badge.had { background: rgba(74,222,128,0.15); color: var(--good); border: 1px solid rgba(74,222,128,0.3); }
 .badge.new { background: rgba(255,179,0,0.15); color: var(--accent); border: 1px solid rgba(255,179,0,0.3); }
+.badge.updating {
+  background: transparent;
+  color: var(--muted);
+  border: 1px dashed var(--muted);
+  animation: badge-pulse 1.4s ease-in-out infinite;
+}
+@keyframes badge-pulse {
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .badge.updating { animation: none; }
+}
 
 .tabs {
   display: flex;
