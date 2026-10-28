@@ -16,6 +16,7 @@ import {
   onHadScan,
   currentUsername,
   getProfile,
+  getProfileBasics,
   logout,
   getBeer,
   getSessionInfo,
@@ -63,11 +64,19 @@ app.post('/api/login', async (_req, res) => {
   }
 });
 
-app.get('/api/me', async (req, res) => {
+// Fast: the stored profile basics plus the session expiry; never visits Untappd.
+app.get('/api/me', async (_req, res) => {
   try {
-    // Profile is cached; the session expiry is read fresh every time.
-    const profile = await getProfile(req.query.refresh === '1');
-    res.json({ ...profile, session: await getSessionInfo() });
+    res.json({ ...getProfileBasics(), session: await getSessionInfo() });
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// Slow: the live profile with its stats (cached for 10 minutes).
+app.get('/api/me/stats', async (req, res) => {
+  try {
+    res.json(await getProfile(req.query.refresh === '1'));
   } catch (err) {
     res.status(500).json({ error: String(err?.message || err) });
   }

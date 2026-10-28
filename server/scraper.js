@@ -525,6 +525,32 @@ export async function getBeer(beerUrl) {
 
 let profileCache = null;
 const PROFILE_TTL_MS = 10 * 60 * 1000;
+const PROFILE_FILE = path.join(USER_DATA_DIR, 'profile.json');
+
+/**
+ * The parts of the profile that rarely change (who, where, avatar, which
+ * stats), kept on disk so the account screen can show them at once while the
+ * numbers load. Rewritten on every profile visit; null until the first one.
+ */
+export function getProfileBasics() {
+  try {
+    return JSON.parse(fs.readFileSync(PROFILE_FILE, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function saveProfileBasics({ username, name, location, avatar, stats }) {
+  try {
+    const tmp = `${PROFILE_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({
+      username, name, location, avatar, statLabels: stats.map((s) => s.label),
+    }));
+    fs.renameSync(tmp, PROFILE_FILE);
+  } catch (err) {
+    console.warn('[scraper] could not save profile basics:', err.message);
+  }
+}
 
 /** Avatar, display name and headline stats from the user's Untappd profile. */
 export async function getProfile(force = false) {
@@ -551,6 +577,7 @@ export async function getProfile(force = false) {
       };
     });
     profileCache = { username, ...profile, fetchedAt: Date.now() };
+    saveProfileBasics(profileCache);
     return profileCache;
   } finally {
     await page.close().catch(() => {});
@@ -575,6 +602,7 @@ export async function logout() {
   hadSavedAt = null;
   profileCache = null;
   try { fs.unlinkSync(HAD_FILE); } catch { /* not cached */ }
+  try { fs.unlinkSync(PROFILE_FILE); } catch { /* not cached */ }
   console.log('[scraper] logged out of Untappd');
 }
 

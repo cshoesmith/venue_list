@@ -467,8 +467,13 @@ export default function App() {
     setError('');
     setShowProfile(true);
     api('/api/refresh-had').then(setUniques).catch(() => {});
+    // Stored basics show at once; the live stats (which also refresh the
+    // basics) follow, so they always land last.
     try {
-      setProfile(await api('/api/me'));
+      const me = await api('/api/me');
+      setProfile((p) => ({ ...p, ...me }));
+      const live = await api('/api/me/stats');
+      setProfile((p) => ({ ...p, ...live }));
     } catch (e) {
       setError(e.message);
     }
@@ -796,10 +801,10 @@ export default function App() {
       {showProfile && (
         <Modal title="Untappd account" size="small" onClose={closeProfile}>
           {error && <div className="error">{error}</div>}
-          {!profile && !error && (
+          {!profile?.username && !error && (
             <div className="loading"><BeerMug /> Loading profile…</div>
           )}
-          {profile && (
+          {profile?.username && (
             <div className="profile">
               {profile.avatar && <img className="profile-avatar" src={profile.avatar} alt="" />}
               <div className="profile-name">{profile.name || profile.username}</div>
@@ -807,9 +812,9 @@ export default function App() {
                 {[`@${profile.username}`, profile.location].filter(Boolean).join(' · ')}
               </div>
               <div className="profile-stats">
-                {profile.stats.map((s) => (
+                {(profile.stats || (profile.statLabels || []).map((label) => ({ label }))).map((s) => (
                   <div key={s.label} className="profile-stat">
-                    <div className="profile-stat-value">{s.value}</div>
+                    <div className="profile-stat-value">{s.value ?? <BeerMug />}</div>
                     <div className="profile-stat-label">{s.label}</div>
                   </div>
                 ))}
